@@ -1,0 +1,14 @@
+{application, eqc_rebar,
+ [{description, "A rebar plugin for eqc"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, [eqc_rebar_prv, eqc_rebar]},
+
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.
