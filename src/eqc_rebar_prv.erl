@@ -205,21 +205,19 @@ build_root_extras(State, Apps) ->
     end.
 
 coloured_output(_, ".", []) ->
-    cf:print("~!g.");
-coloured_output(_, "x", []) ->
-    cf:print("~!y*");
+    cf:print("~!g.~!!");
 coloured_output(_, "Failed! ", []) ->
-    cf:print("~!r~nFailed! ~!!");
+    cf:print("~!R~nFailed! ~!!");
 coloured_output(_, "After ~w tests", [N]) ->
-    cf:print("~!rAfter ~w tests ", [N]);
+    cf:print("~!rAfter ~w tests~!!", [N]);
 coloured_output(Mod, "~w: ", [P]) ->
     %% tricky, but this indicates printing the name of the property
-    cf:print("~!g~p:~w: ", [Mod, P]);
+    cf:print("~!g~p:~w: ~!!", [Mod, P]);
 coloured_output(_, "~nOK, passed ~w tests~n", [N]) ->
     %% Testing budget prints newline, so no need here
-    cf:print("~!gOK, passed ~w tests~n", [N]);
+    cf:print("~!gOK, passed ~w tests~!!~n", [N]);
 coloured_output(_, S, F) ->
-    io:format(S, F).
+    cf:print(S, F).
 
 -spec select_properties([ file:filename() ], map()) -> {[atom()], [{atom(), atom(), 0}]}.
 select_properties(ProjectDirs, _Options) ->
