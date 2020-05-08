@@ -128,14 +128,26 @@ do_eqc(State, Options) ->
                     Numtests = [ {numtests, maps:get(numtests, Options)} ||
                                    maps:is_key(numtests, Options) ],
 
-                    lists:foreach(fun(Mod) ->
+                    %% TODO handle skip and other results
+                    EQCResults =
+                        lists:foldl(fun(Mod, Acc) ->
                                           OnOutput =
                                               case maps:get(plain, Options) of
                                                   true -> [];
                                                   false -> [{on_output, fun(S, F) -> coloured_output(Mod, S, F) end}]
                                               end,
-                                          eqc:module(Budget ++ Numtests ++ OnOutput, Mod)
-                                  end, EqcModules)
+                                          Acc ++ [ {Mod, P} || P <- try eqc:module(Budget ++ Numtests ++ OnOutput, Mod)
+                                                                    catch _:_ ->
+                                                                            [{Mod, [module]}]
+                                                                    end ]
+                                  end, [], EqcModules),
+                    case EQCResults of
+                        [] ->
+                            cf:print("~!gPassed ~p properties~n", [length(Properties)]);
+                        Failed ->
+                            cf:print("~!r~p properties, ~p failures ~!!~n", [length(Properties), length(Failed)]),
+                            rebar_api:error("Errors running QuickCheck", [])
+                      end
             end;
         {true, _} ->
             rebar_prv_shell:do(State);
@@ -233,10 +245,19 @@ select_properties(ProjectDirs, _Options) ->
                     end, [], Files),
     {lists:usort([M || {M,_,_} <- Properties]), Properties}.
 
+%% When running in test profile, the "test" directory is added as an extra_src_dir
+%% That is essential in order not to have beam copies in basedir/test
+%% It is a mystery why test files are occuring as beam in both _build/../ebin and _build/../test
 -spec add_src_dirs(rebar_state:t(), [ file:filename() ]) -> rebar_state:t().
 add_src_dirs(State, Dirs) ->
-    SrcDirs = rebar_dir:all_src_dirs(rebar_state:opts(State)),
-    rebar_api:debug("Identified src_dirs ~p", [SrcDirs]),
+    SrcDirs = rebar_dir:src_dirs(rebar_state:opts(State)),
+    case lists:member("test", Dirs) of
+        true ->
+            rebar_api:warn("Found \"test\" in src_dirs ~p, "
+                           "rather run with \"as test\" profile", [Dirs]);
+        false ->
+            rebar_api:debug("Identified src_dirs ~p", [SrcDirs])
+    end,
     ErlOpts = rebar_state:get(State, erl_opts, []),
     NewSrcDirs = (SrcDirs -- Dirs) ++ Dirs,
     NewErlOpts = [{src_dirs, NewSrcDirs} | proplists:delete(src_dirs, ErlOpts)],
