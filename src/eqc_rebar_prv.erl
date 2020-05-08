@@ -335,7 +335,18 @@ check_for_eqc(State) ->
             ok
     end,
     %% Start quickcheck to update licence check
-    eqc:start().
+    case eqc:start() of
+        ok ->
+            case eqc:version() < 1.44 of
+                true ->
+                    %% Some things might work, such as running a compiling and running a shell
+                    rebar_api:error("QuickCheck version 1.44.1 or later required",  []);
+                false ->
+                    ok
+            end;
+        Error ->
+            rebar_api:abort("Cannot start QuickCheck ~p", [Error])
+    end.
 
 
 -spec format_error(any()) ->  iolist().
