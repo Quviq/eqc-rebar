@@ -77,8 +77,8 @@ do(State) ->
 
     Apps = rebar_state:project_apps(State),
     _ = [ begin
-              rebar_api:info("Apps ~p", [rebar_app_info:name(App)]),
-              rebar_api:info("Profiles ~p", [rebar_app_info:profiles(App)])
+              rebar_api:debug("Apps ~p", [rebar_app_info:name(App)]),
+              rebar_api:debug("Profiles ~p", [rebar_app_info:profiles(App)])
           end || App <- Apps ],
 
     %% merge ErlOpts into existing opts and default
@@ -88,28 +88,16 @@ do(State) ->
     %% Now this needs to go back in the state
     %% But we may need to add top level eqc directory to one of the apps
     State4 = add_apps_and_virtual(State3, NewApps),
-
-    %% TODO Explore rebar_prv_compile:build_root_extras(State, Apps)
-    %% check how eunit adds top level test directory
-
-    %% To see if one can create an extras dir without including it in lib include path
-    %% overwriting eqc include path
-    %% rebar_api:info("NewApps ~p", [NewApps]),
-
-
     State5 = load_and_compile(State4),
 
     do_eqc(State5, Options),
     {ok, State5}.
 
 do_eqc(State, Options) ->
-    PropDirs = [ rebar_app_info:ebin_dir(App) || App <- rebar_state:project_apps(State) ],
+    PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
-
-    rebar_api:info("Found following directories: ~p", [ PropDirs ]),
     {EqcModules, Properties} = select_properties(PropDirs, Options),
 
-    %% rebar_api:info("State ~p", [ State ]),
     case {maps:get(shell, Options), maps:get(compile, Options)} of
         {false, false} ->
             rebar_api:info("Running EQC tests...~n", []),
@@ -236,11 +224,12 @@ select_properties(ProjectDirs, _Options) ->
                             end
                     end, [], ProjectDirs),
     Properties =
-        lists:foldl(fun(BeamFile, Props) ->
-                            Mod = rebar_utils:beam_to_mod(BeamFile),
-                            [ {Mod, Name, 0} || {Name, 0} <- Mod:module_info(exports),
-                                                lists:prefix("prop_", atom_to_list(Name)) ] ++ Props
-                    end, [], Files),
+        lists:usort(
+          lists:foldl(fun(BeamFile, Props) ->
+                              Mod = rebar_utils:beam_to_mod(BeamFile),
+                              [ {Mod, Name, 0} || {Name, 0} <- Mod:module_info(exports),
+                                                  lists:prefix("prop_", atom_to_list(Name))] ++ Props
+                      end, [], Files)),
     {lists:usort([M || {M,_,_} <- Properties]), Properties}.
 
 %% When running in test profile, the "test" directory is added as an extra_src_dir
