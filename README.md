@@ -13,18 +13,26 @@ running eqc properties:
 Use
 ---
 
-Add the plugin to your rebar config:
+Add the plugin to your rebar configof an existing application:
 
     {plugins, [
-        {eqc_rebar, {git, "https://github.com/Quviq/eqc-rebar.git", {tag, "1.0.0"}}}
+        {eqc_rebar, {git, "https://github.com/Quviq/eqc-rebar.git", {branch, "master"}}}
     ]}.
 
-Then just call your plugin directly in an existing application:
+Create an `eqc` directory in the same way as you have a `src` and
+`test` directory and keep you properties and generators in that
+`eqc` directory.
+
+Then just call your plugin directly in this top-level application directory:
 
     $ rebar3 eqc
     ===> Fetching eqc_rebar
     ===> Compiling eqc_rebar
     <Plugin Output>
+
+All properties will be extracted and checked with QuickCheck. You need
+a [QuickCheck licence](mailto:support@quviq.com?eqc%20licence%20info)
+for it and eqc-1.44.1 or higher installed.
 
 
 EQC environment
@@ -42,6 +50,10 @@ After compilation, all QuickCheck properties found are checked with
 Quviq's quickcheck. The total testing time is by default 20 seconds
 and can be adjusted by the `testing_budget` option. The budget is
 devided equally over the number of modules provided.
+
+Other users of  your repository, not having a licence, can use your
+software, but cannot check the properties. The `eqc` directory can be 
+ignored by them.
 
 
 Directory structure
@@ -61,46 +73,42 @@ support this in one command.
 
 (todo: getting combined coverage)
 
-The test profile is not selectedf by default. That means that the
+The test profile is not selected by default. That means that the
 macro `TEST` is not defined by the eqc_rebar plugin, neither are
 files in the `test` directory compiled.
 
-Properties in `test`directory
+Properties in `test` directory
 ---
 
 One can add the test profile to combine tests and quickcheck. In this
 case the active profile will be `test+eqc` in which files in both the
 `test` and the `eqc` directory are compiled with the macros `TEST` and
 `EQC` both defined.
-```shell
+```bash
 rebar3 as test eqc
 ```
 Note that this command checks the properties defined in both test and eqc
 directories, but it does not run the unit tests. In this context
 `eqc` is the command not the profile.
 
-As explained above, verifying both the properties as well as the unit
-tests would best be obtained by:
-```shell
-rebar3 do eqc eunit
+Unit tests should be run with `rebar3 eunit` and if you have added quickcheck 
+tests in the `test` directory that are called from within a test:
+```erlang
+many_test() ->
+  eqc:quickcheck(prop_many()).
 ```
-and if one has properties in the `test` directory then one would run it with a profile:
-```shell
-rebar3  as test do eqc
+then one normally would us `-ifdef(EQC) ... -endif.` it to exclude these
+tests for people not having a licence.
+Add `{d, 'EQC'}` to the erl_opts in an eqc profile in rebar.config to make it 
+work with eunit.
+```bash
+rebar3 as eqc eunit
 ```
-This is subtly different from `rebar3 as test do eunit, eqc` because
-this latter runs eunit without compiling files in eqc directory and without `EQC` macro defined.
-That means that properties in test directory
-excluded with `-ifdef(EQC)` are not part of the eunit tests. Moreover,
-it would copy beam files in the top level test diretory, which
-certainly is not what you want.
-
-
-
+ 
 Properties in `src` directory
 ---
 
-Properties in the source code are autiomatcially detected by
+Properties in the source code are automatically detected by
 the plugin and checked by QuickCheck. It is not advised to add
 properties to source code, this creates a dependency between a
 distribution and quickcheck, which would be totally unnecessary.
@@ -122,7 +130,7 @@ Working in Erlang shell
 
 One can run a shell with quickcheck compiled code by providing the
 `shell` option.
-```shell
+```bash
 rebar3 eqc --shell
 ```
 This differs from `rebar3 do eqc, shell` by the fact that the latter
