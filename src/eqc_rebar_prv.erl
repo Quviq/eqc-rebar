@@ -205,13 +205,7 @@ build_root_extras(State, Apps) ->
                     file:write_file(AppFileDir, io_lib:format("~p.", [AppFile])),
                     VApp1 = rebar_app_info:out_dir(VApp0, DstDir),
                     VApp2 = rebar_app_info:ebin_dir(VApp1, OutDir),
-                    VApp3 = VApp2,
-                    %% Extract things from eqc profile, but not from the complete project
-                    %% Opts = rebar_state:opts(State),
-                    %% VApp3 = rebar_app_info:opts(VApp2, Opts),
-                    VApp4 = rebar_app_info:set(VApp3, src_dirs, ["eqc", "test"]),
-                    rebar_api:info("App = ~p", [VApp4]),
-                    [VApp4]
+                    [rebar_app_info:set(VApp2, src_dirs, ["eqc", "test"])]
             end
     end.
 
