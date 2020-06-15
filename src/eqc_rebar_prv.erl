@@ -72,8 +72,7 @@ do(State) ->
     %% use rebar_app_info:update_opts to update for opts and default profile
     %% Parse transform has to be applied to all!
     State1 = def_macros(State, [{d, 'EQC'}]),
-    State2 = add_src_dirs(State1, ["eqc", "src"]),
-    State3 = with_pulse(State2, Options),
+    State2 = with_pulse(State1, Options),
 
     Apps = rebar_state:project_apps(State),
     _ = [ begin
@@ -82,16 +81,22 @@ do(State) ->
           end || App <- Apps ],
 
     %% merge ErlOpts into existing opts and default
-    ErlOpts = rebar_state:get(State3, erl_opts, []),
-    NewApps = [ rebar_app_info:update_opts(App, dict:store(erl_opts, ErlOpts, dict:new()))
+    ErlOpts = rebar_state:get(State2, erl_opts, []),
+    NewApps = [ begin
+                    SrcDirs = rebar_app_info:get(App, src_dirs, ["src"]),
+                    App1 = rebar_app_info:set(App, src_dirs, (SrcDirs -- ["eqc"]) ++ ["eqc"]),
+                    rebar_app_info:update_opts(App1, dict:store(erl_opts, ErlOpts, dict:new()))
+                end
                 || App <- Apps ],
     %% Now this needs to go back in the state
     %% But we may need to add top level eqc directory to one of the apps
-    State4 = add_apps_and_virtual(State3, NewApps),
-    State5 = load_and_compile(State4),
+    code:add_pathsa([rebar_app_info:dir(App) || App <- NewApps ]),
 
-    do_eqc(State5, Options),
-    {ok, State5}.
+    State3 = add_apps_and_virtual(State2, NewApps),
+    State4 = load_and_compile(State3),
+
+    do_eqc(State4, Options),
+    {ok, State4}.
 
 do_eqc(State, Options) ->
     PropDirs = rebar_state:code_paths(State, all_deps),
@@ -173,21 +178,38 @@ build_root_extras(State, Apps) ->
             [];
         false ->
             %% Build an application called properties
-            %% TODO see if we can use plugin dir eqc_rebar without name clash
-            _ProjOpts = rebar_state:opts(State),
-            %% rebar_api:info("Creating top level app ~p with basedir ~p", [ProjOpts, BaseDir]),
             {ok, VApp0} = rebar_app_info:new("properties", "0.1.0", BaseDir, []),
             SrcDir = filename:join([BaseDir, "eqc"]),
             case ec_file:is_dir(SrcDir) of
                 false ->
                     [];
                 true ->
-                    OutDir = filename:join([BaseDir, "_build", "eqc", "lib", "properties"]),
-                    VApp1 = rebar_app_info:out_dir(VApp0, OutDir),
-                    VApp2 = rebar_app_info:ebin_dir(VApp1, filename:join(OutDir, "ebin")),
-                    Opts = rebar_state:opts(State),
-                    VApp3 = rebar_app_info:opts(VApp2, Opts),
-                    VApp4 = rebar_app_info:set(VApp3, src_dirs, ["eqc"]),
+                    %% Check paths... we might want to write "../include" in eqc dir file
+                    %% hence be on same level with rest of apps and code
+                    AppFile = {application, properties,
+                               [{description, "A fake OTP library"},
+                                {vsn, "0.1.0"},
+                                {registered, []},
+                                {applications,
+                                 [kernel,
+                                  stdlib,
+                                  eqc
+                                 ]},
+                                {env,[]},
+                                {modules, []}
+                               ]},
+                    DstDir = filename:join([rebar_dir:base_dir(State), "properties"]),
+                    OutDir = filename:join([DstDir, "ebin"]),
+                    AppFileDir = filename:join(OutDir, "properties.app"),
+                    filelib:ensure_dir(AppFileDir),
+                    file:write_file(AppFileDir, io_lib:format("~p.", [AppFile])),
+                    VApp1 = rebar_app_info:out_dir(VApp0, DstDir),
+                    VApp2 = rebar_app_info:ebin_dir(VApp1, OutDir),
+                    VApp3 = VApp2,
+                    %% Extract things from eqc profile, but not from the complete project
+                    %% Opts = rebar_state:opts(State),
+                    %% VApp3 = rebar_app_info:opts(VApp2, Opts),
+                    VApp4 = rebar_app_info:set(VApp3, src_dirs, ["eqc", "test"]),
                     rebar_api:info("App = ~p", [VApp4]),
                     [VApp4]
             end
@@ -232,24 +254,6 @@ select_properties(ProjectDirs, _Options) ->
                                                   lists:prefix("prop_", atom_to_list(Name))] ++ Props
                       end, [], Files)),
     {lists:usort([M || {M,_,_} <- Properties]), Properties}.
-
-%% When running in test profile, the "test" directory is added as an extra_src_dir
-%% That is essential in order not to have beam copies in basedir/test
-%% It is a mystery why test files are occuring as beam in both _build/../ebin and _build/../test
--spec add_src_dirs(rebar_state:t(), [ file:filename() ]) -> rebar_state:t().
-add_src_dirs(State, Dirs) ->
-    SrcDirs = rebar_dir:src_dirs(rebar_state:opts(State)),
-    case lists:member("test", Dirs) of
-        true ->
-            rebar_api:warn("Found \"test\" in src_dirs ~p, "
-                           "rather run with \"as test\" profile", [Dirs]);
-        false ->
-            rebar_api:debug("Identified src_dirs ~p", [SrcDirs])
-    end,
-    ErlOpts = rebar_state:get(State, erl_opts, []),
-    NewSrcDirs = (SrcDirs -- Dirs) ++ Dirs,
-    NewErlOpts = [{src_dirs, NewSrcDirs} | proplists:delete(src_dirs, ErlOpts)],
-    rebar_state:set(State, erl_opts, NewErlOpts).
 
 %% Macro definitions of the form {d, Name} or {d, Name, Value}.
 -spec def_macros(rebar_state:t(), [ {d, atom()} | {d, atom(), any()} ]) -> rebar_state:t().
