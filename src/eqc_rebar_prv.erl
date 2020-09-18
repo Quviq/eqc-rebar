@@ -211,8 +211,8 @@ build_root_extras(State, Apps) ->
 
 coloured_output(_, ".", []) ->
     cf:print("~!g.~!!");
-coloured_output(_, "Failed! ", []) ->
-    cf:print("~!R~nFailed! ~!!");
+coloured_output(_, "Failed! "++Rest, []) ->
+    cf:print("~!R~nFailed! "++Rest++"~!!");
 coloured_output(_, "After ~w tests", [N]) ->
     cf:print("~!rAfter ~w tests~!!", [N]);
 coloured_output(Mod, "~w: ", [P]) ->
@@ -314,9 +314,9 @@ check_for_eqc(State) ->
     EqcPath = code:which(eqc),
     case {EqcPath, EqcLibs} of
         {non_existing, []} ->
-            rebar_api:error("No eqc installation available");
+            rebar_api:abort("No eqc installation available", []);
         {non_existing, _} ->
-            rebar_api:error("Eqc in path ~p, but not available?", [EqcLibs]);
+            rebar_api:abort("Eqc in path ~p, but not available?", [EqcLibs]);
         {_, []} ->
             rebar_api:warn("Eqc available but not in rebar3 code path", [EqcPath]);
         _ ->
