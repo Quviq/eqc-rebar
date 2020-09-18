@@ -9,6 +9,7 @@
 
 -define(PROVIDER, eqc).
 -define(DEPS, [lock]).
+-define(PLUGIN_LOCAL_EQC_DIR, "quickcheck").
 %% We use lock to recompile deps (if using "compile" then default compiled with wrong flags)
 
 %% ===================================================================
@@ -33,6 +34,8 @@ init(State) ->
                     {plain, $x, "plain", boolean, "Renders plain output"},
                     {shell, $s, "shell", boolean, "Enter and Erlang shell"},
                     {compile, $c, "compile", boolean, "Only compile code, do not run quickcheck"},
+                    {install, $i, "install", boolean, "Install QuickCheck before"},
+                    {licence, $l, "licence", string, "Provide a site licence (be careful!)"},
                     {name, undefined, "name", atom, "Long node name for eqc node"},
                     {sname, undefined, "sname", atom, "Short node name for eqc node"}]},
             {short_desc, "Verify QuickCheck properties using eqc"},
@@ -41,6 +44,7 @@ init(State) ->
                    "Defined EQC macro and PULSE macro if pulse option set. "
                    "If you have eqc dir with files add that as extra_src_dir to eqc profile. "
                    "If you want test profile as well, run: 'rebar3 as test quickcheck'. "
+                   "You cannot install and test in the same go."
             },
             {profiles, [eqc]}
     ]),
@@ -61,11 +65,54 @@ do(State) ->
                                    , eqc_cover => false
                                    , shell => false
                                    , plain => false
+                                   , install => false
+                                   , licence => ""
                                    , compile => false %% only compile if true
                                    }),
+    do(State, Options).
 
+do(State, #{install := true})->
+    LatestEQC = "eqcR" ++ erlang:system_info(otp_release) ++ ".zip",
+    inets:start(),
+    LocalEQCDir = filename:join(filename:dirname(filename:dirname(code:which(?MODULE))),
+                                ?PLUGIN_LOCAL_EQC_DIR),
+    rebar_api:info("Downloading quickcheck ~s to ~p", [LatestEQC, LocalEQCDir]),
+    case httpc:request("http://www.quviq.com/downloads/" ++ LatestEQC) of
+        {ok, {{"HTTP/1.1", 200, "OK"}, _, Bytes}} ->
+            filelib:ensure_dir(LocalEQCDir),
+            case zip:extract(list_to_binary(Bytes), [memory]) of
+                {ok, Files} ->
+                    lists:foreach(fun({FileName, Bin}) ->
+                                          Dest = filename:join([LocalEQCDir | tl(filename:split(FileName))]),
+                                          ok = filelib:ensure_dir(Dest),
+                                          ok = file:write_file(Dest, Bin)
+                                  end, Files);
+                ExtractError ->
+                    rebar_api:abort("Unzip Error ~p", [ExtractError])
+            end;
+        Error ->
+            rebar_api:abort("Download error ~p", [Error])
+    end,
+    {ok, State};
+
+do(State, Options)->
     setup_name(State),
-    check_for_eqc(State),
+
+    %% Add eqc dirs to path in case they have been locally installed
+    LocalEqcDir = filename:join(filename:dirname(filename:dirname(code:which(?MODULE))),
+                                ?PLUGIN_LOCAL_EQC_DIR),
+    case file:list_dir(LocalEqcDir) of
+        {ok, Dirs} ->
+            %% QuickCheck locally installed
+            rebar_api:debug("Local QuickCheck in ~s found ~p", [LocalEqcDir, Dirs]),
+            [ code:add_pathz(filename:join([LocalEqcDir, Dir, "ebin"])) ||
+                Dir <- Dirs, filelib:is_dir(filename:join([LocalEqcDir, Dir, "ebin"])) ];
+        _ ->
+            rebar_api:debug("no local eqc ~s", [LocalEqcDir]),
+            ok
+    end,
+    rebar_api:debug("Checking for eqc installation ~p", [code:get_path()]),
+    check_for_eqc(State, maps:get(licence, Options)),
 
     %% Update erl_opts such that eqc dirs are added to source location and
     %% parse_transforms are used for all applications
@@ -301,7 +348,7 @@ with_pulse(State, #{pulse := false}) ->
     end,
     State.
 
-check_for_eqc(State) ->
+check_for_eqc(State, Licence) ->
     DefaultPaths = rebar_state:code_paths(State, default),
     Libs = [ case lists:reverse(filename:split(X)) of
                  ["ebin", Lib | _ ] -> Lib;
@@ -318,9 +365,19 @@ check_for_eqc(State) ->
         {non_existing, _} ->
             rebar_api:abort("Eqc in path ~p, but not available?", [EqcLibs]);
         {_, []} ->
-            rebar_api:warn("Eqc available but not in rebar3 code path", [EqcPath]);
+            %%  This happens when eqc is installed in plugin
+            rebar_api:warn("Eqc used in path ~p", [EqcPath]);
         _ ->
             ok
+    end,
+
+    %% Now QuickCheck should work
+    case string:length(Licence) > 0 of
+        false ->
+            ok;
+        true ->
+            rebar_api:debug("Forcing licence registration\n", []),
+            eqc:force_registration([Licence])
     end,
     %% Start quickcheck to update licence check
     case eqc:start() of
