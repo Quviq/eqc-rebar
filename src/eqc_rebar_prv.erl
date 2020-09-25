@@ -187,7 +187,7 @@ do_eqc(State, Options) ->
                         Failed ->
                             cf:print("~!r~p properties, ~p failures ~!!~n", [length(Properties), length(Failed)]),
                             cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
-                            rebar_api:error("Errors running QuickCheck", [])
+                            rebar_api:abort("Errors running QuickCheck", [])
                       end
             end;
         {true, _} ->
