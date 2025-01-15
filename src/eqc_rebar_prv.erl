@@ -30,6 +30,7 @@ init(State) ->
                     {testing_budget, $t, "testing_budget", integer, "Set total testing time in seconds"},
                     {properties, $p, "properties", string, "Names of properties to check"},
                     {eqc_cover, undefined, "eqc_cover", boolean, "Cover compile usign eqc_cover"},
+                    {sys_config, undefined, "sys_config", string, "Path to a sys.config file to use"},
                     %%  {counterexample, $c, "counterexample", boolean, "Show counterexample"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
                     {shell, $s, "shell", boolean, "Enter and Erlang shell"},
@@ -50,7 +51,6 @@ init(State) ->
     ]),
     {ok, rebar_state:add_provider(State, Provider)}.
 
-
 %% Need to:
 %% - find and run QuickCheck
 %% - compile eqc files in ./eqc and apps/X/eqc
@@ -63,12 +63,25 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
+                                   , sys_config => undefined
                                    , shell => false
                                    , plain => false
                                    , install => false
                                    , licence => ""
                                    , compile => false %% only compile if true
                                    }),
+    case find_config(State) of
+      undefined -> State;
+      ConfigPath  ->
+        case file:consult(ConfigPath) of
+          {ok, Config} ->
+            rebar_api:info("Loading config from ~p", [ConfigPath]),
+            %% The `rebar3 shell` plugin also kills apps (with a blacklist for e.g. the kernel)
+            %% before getting to this point and doing reread_config.
+            rebar_utils:reread_config(Config, [update_logger]);
+          {error, Reason} -> rebar_api:abort("Failed to load sys_config: ~p~n", [Reason])
+        end
+    end,
     do(State, Options).
 
 do(State, #{install := true})->
@@ -412,3 +425,11 @@ set_defaults(State, Defaults) ->
 setup_name(State) ->
     {Long, Short, Opts} = rebar_dist_utils:find_options(State),
     rebar_dist_utils:either(Long, Short, Opts).
+
+%% Command line overrides sys_config in rebar.config
+find_config(State) ->
+  {Opts, _} = rebar_state:command_parsed_args(State),
+  case proplists:get_value(sys_config, Opts, undefined) of
+    undefined -> rebar_state:get(State, sys_config, undefined);
+    FilePath  -> FilePath
+  end.
