@@ -70,6 +70,8 @@ do(State) ->
                                    , licence => ""
                                    , compile => false %% only compile if true
                                    }),
+    %% This idea is copied from the `rebar3 shell` plugin which uses it to
+    %% implement the `--config` option.
     case find_config(State) of
       undefined -> State;
       ConfigPath  ->
@@ -77,7 +79,10 @@ do(State) ->
           {ok, Config} ->
             rebar_api:info("Loading config from ~p", [ConfigPath]),
             %% The `rebar3 shell` plugin also kills apps (with a blacklist for e.g. the kernel)
-            %% before getting to this point and doing reread_config.
+            %% before getting to this point and doing reread_config to make sure none of the apps
+            %% supposed to be started by the shell have already been booted with the wrong config.
+            %% It's not clear if we need to do the same thing here - but for the sake of simplicity
+            %% we don't for now.
             rebar_utils:reread_config(Config, [update_logger]);
           {error, Reason} -> rebar_api:abort("Failed to load sys_config: ~p~n", [Reason])
         end
