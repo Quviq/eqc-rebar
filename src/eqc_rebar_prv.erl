@@ -28,7 +28,7 @@ init(State) ->
                     %% {dir, $d, "dir", string, help(dir)},
                     {numtests, $n, "numtests", integer, "Set numtests parameter"},
                     {testing_budget, $t, "testing_budget", integer, "Set total testing time in seconds"},
-                    {properties, $p, "properties", string, "Names of properties to check"},
+                    {testing_profile, $p, "testing_profile", string, "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
                     {eqc_cover, undefined, "eqc_cover", boolean, "Cover compile usign eqc_cover"},
                     {sys_config, undefined, "sys_config", string, "Path to a sys.config file to use"},
                     %%  {counterexample, $c, "counterexample", boolean, "Show counterexample"},
@@ -166,7 +166,7 @@ do(State, Options)->
 do_eqc(State, Options) ->
     PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
-    {EqcModules, Properties} = select_properties(PropDirs, Options),
+    {EqcModules, Properties} = select_properties(PropDirs),
 
     case {maps:get(shell, Options), maps:get(compile, Options)} of
         {false, false} ->
@@ -185,6 +185,8 @@ do_eqc(State, Options) ->
                                      not maps:is_key(numtests, Options) ],
                     Numtests = [ {numtests, maps:get(numtests, Options)} ||
                                    maps:is_key(numtests, Options) ],
+                    Profile  = [ {testing_profile, maps:get(testing_profile, Options)} ||
+                                   maps:is_key(testing_profile, Options) ],
 
                     %% TODO handle skip and other results
                     EQCResults =
@@ -194,7 +196,7 @@ do_eqc(State, Options) ->
                                                   true -> [];
                                                   false -> [{on_output, fun(S, F) -> coloured_output(Mod, S, F) end}]
                                               end,
-                                          Acc ++ [ {Mod, P} || P <- try eqc:module(Budget ++ Numtests ++ OnOutput, Mod)
+                                          Acc ++ [ {Mod, P} || P <- try eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod)
                                                                     catch _:_ ->
                                                                             [{Mod, [module]}]
                                                                     end ]
@@ -289,8 +291,8 @@ coloured_output(_, "~nOK, passed ~w tests~n", [N]) ->
 coloured_output(_, S, F) ->
     cf:print(S, F).
 
--spec select_properties([ file:filename() ], map()) -> {[atom()], [{atom(), atom(), 0}]}.
-select_properties(ProjectDirs, _Options) ->
+-spec select_properties([ file:filename() ]) -> {[atom()], [{atom(), atom(), 0}]}.
+select_properties(ProjectDirs) ->
     %% After compilation, files are already loaded
     Files =
         lists:foldl(fun(Dir, Fs) ->
