@@ -169,7 +169,6 @@ do(State, Options)->
     {ok, State5}.
 
 do_eqc(State, Options) ->
-    EqcCover = maps:get(eqc_cover, Options, false),
     PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
     {EqcModules, Properties} = select_properties(PropDirs),
@@ -195,27 +194,25 @@ do_eqc(State, Options) ->
                                    maps:is_key(testing_profile, Options) ],
 
                     %% TODO handle skip and other results
-                    [ put(cover_ticks, []) || EqcCover ],
+                    eqc_cover_init(Options),
                     EQCResults =
                         lists:foldl(fun(Mod, Acc) ->
-                                          OnOutput =
+                                          Format =
                                               case maps:get(plain, Options) of
-                                                  true -> [];
-                                                  false -> [{on_output, fun(S, F) -> coloured_output(Mod, S, F) end}]
+                                                  true  -> fun io:format/2;
+                                                  false -> fun(Fmt, Args) -> coloured_output(Mod, Fmt, Args) end
                                               end,
+                                          OnOutput = [{on_output, fun(Fmt, Args) ->
+                                                                    eqc_cover_on_output(Mod, Fmt, Args, Options),
+                                                                    Format(Fmt, Args)
+                                                                  end}],
                                           Acc ++ [ {Mod, P} || P <- try
-                                                                      [ eqc_cover:start() || EqcCover ],
-                                                                      Failed = eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod),
-                                                                      [ begin
-                                                                          Ticks = eqc_cover:stop(atom_to_list(Mod)),
-                                                                          put(cover_ticks, eqc_cover:merge_ticks(Ticks, get(cover_ticks)))
-                                                                        end || EqcCover ],
-                                                                      Failed
-                                                                    catch _:_ ->
-                                                                      [module]
+                                                                      eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod)
+                                                                    catch _:Reason:Trace ->
+                                                                      [{module, Reason, Trace}]
                                                                     end ]
                                   end, [], EqcModules),
-                    [ save_eqc_cover_ticks(get(cover_ticks), Options) || EqcCover ],
+                    eqc_cover_save(Options),
                     case EQCResults of
                         [] ->
                             cf:print("~!gPassed ~p properties~n", [length(Properties)]);
@@ -232,8 +229,50 @@ do_eqc(State, Options) ->
             ok
     end.
 
--spec save_eqc_cover_ticks(eqc_cover:ticks(), map()) -> ok.
-save_eqc_cover_ticks(Ticks, Options) ->
+-define(COVER_TABLE, eqc_cover_table).
+
+-spec eqc_cover_init(map()) -> ok.
+eqc_cover_init(#{eqc_cover := true}) ->
+  ets:new(?COVER_TABLE, [named_table, public]),
+  ets:insert(?COVER_TABLE, {ticks, []});
+eqc_cover_init(_) -> ok.
+
+%% This is very hacky, but the alternative is reimplementing eqc:module/2 here.
+%% The correct solution is of course to fix eqc:module/2 itself so it can do
+%% per-property coverage.
+eqc_cover_on_output(_Mod, _Fmt, _Args, #{eqc_cover := false}) -> ok;
+eqc_cover_on_output(_Mod, "~w: ", [Prop], _) ->
+  ets:insert(?COVER_TABLE, {prop, Prop}),
+  eqc_cover:start(),
+  ok;
+eqc_cover_on_output(Mod, "~nOK, passed" ++ _, _Args, _) ->
+  eqc_cover_stop(Mod);
+eqc_cover_on_output(Mod, "~nGave up!" ++ _, _Args, _) ->
+  eqc_cover_stop(Mod);
+eqc_cover_on_output(Mod, "After ~w tests" ++ _, _Args, _) ->
+  %% This means we don't measure coverage during shrinking, but that's probably correct?
+  eqc_cover_stop(Mod);
+eqc_cover_on_output(_Mod, _Fmt, _Args, _) ->
+  ok.
+
+eqc_cover_stop(Mod) ->
+  try
+    [{prop, Prop}] = ets:lookup(?COVER_TABLE, prop),
+    ets:delete(?COVER_TABLE, prop),
+    [{ticks, OldTicks}] = ets:lookup(?COVER_TABLE, ticks),
+    NewTicks            = eqc_cover:stop(lists:flatten(io_lib:format("~p:~p", [Mod, Prop]))),
+    Ticks               = eqc_cover:merge_ticks(OldTicks, NewTicks),
+    ets:insert(?COVER_TABLE, {ticks, Ticks})
+  catch _:Reason:Trace ->
+    rebar_api:error("Failed to collect coverage: ~p\n  ~p", [Reason, Trace])
+  end,
+  ok.
+
+-spec eqc_cover_save(map()) -> ok.
+eqc_cover_save(#{eqc_cover := false}) -> ok;
+eqc_cover_save(Options) ->
+  [{ticks, Ticks}] = ets:lookup(?COVER_TABLE, ticks),
+  ets:delete(?COVER_TABLE),
   case maps:get(eqc_cover_html, Options) of
     "none" -> ok;
     OutDir -> eqc_cover:write_html(Ticks, [{out_dir, OutDir}])
