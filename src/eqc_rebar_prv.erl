@@ -29,7 +29,9 @@ init(State) ->
                     {numtests, $n, "numtests", integer, "Set numtests parameter"},
                     {testing_budget, $t, "testing_budget", integer, "Set total testing time in seconds"},
                     {testing_profile, $p, "testing_profile", string, "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
-                    {eqc_cover, undefined, "eqc_cover", boolean, "Cover compile usign eqc_cover"},
+                    {eqc_cover, undefined, "eqc_cover", boolean, "Measure code coverage with eqc_cover"},
+                    {eqc_cover_html, undefined, "eqc_cover_html", string, "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
+                    {eqc_cover_ticks, undefined, "eqc_cover_ticks", string, "File to save cover ticks data (as term_to_binary) or 'none' to not save (default: none)"},
                     {sys_config, undefined, "sys_config", string, "Path to a sys.config file to use"},
                     %%  {counterexample, $c, "counterexample", boolean, "Show counterexample"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
@@ -63,6 +65,8 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
+                                   , eqc_cover_html => "cover-results"
+                                   , eqc_cover_ticks => "none"
                                    , sys_config => undefined
                                    , shell => false
                                    , plain => false
@@ -138,6 +142,7 @@ do(State, Options)->
     %% Parse transform has to be applied to all!
     State1 = def_macros(State, [{d, 'EQC'}]),
     State2 = with_pulse(State1, Options),
+    State3 = with_cover(State2, Options),
 
     Apps = rebar_state:project_apps(State),
     _ = [ begin
@@ -146,7 +151,7 @@ do(State, Options)->
           end || App <- Apps ],
 
     %% merge ErlOpts into existing opts and default
-    ErlOpts = rebar_state:get(State2, erl_opts, []),
+    ErlOpts = rebar_state:get(State3, erl_opts, []),
     NewApps = [ begin
                     SrcDirs = rebar_app_info:get(App, src_dirs, ["src"]),
                     App1 = rebar_app_info:set(App, src_dirs, (SrcDirs -- ["eqc"]) ++ ["eqc"]),
@@ -157,13 +162,14 @@ do(State, Options)->
     %% But we may need to add top level eqc directory to one of the apps
     code:add_pathsa([rebar_app_info:dir(App) || App <- NewApps ]),
 
-    State3 = add_apps_and_virtual(State2, NewApps),
-    State4 = load_and_compile(State3),
+    State4 = add_apps_and_virtual(State3, NewApps),
+    State5 = load_and_compile(State4),
 
-    do_eqc(State4, Options),
-    {ok, State4}.
+    do_eqc(State5, Options),
+    {ok, State5}.
 
 do_eqc(State, Options) ->
+    EqcCover = maps:get(eqc_cover, Options, false),
     PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
     {EqcModules, Properties} = select_properties(PropDirs),
@@ -189,6 +195,7 @@ do_eqc(State, Options) ->
                                    maps:is_key(testing_profile, Options) ],
 
                     %% TODO handle skip and other results
+                    [ put(cover_ticks, []) || EqcCover ],
                     EQCResults =
                         lists:foldl(fun(Mod, Acc) ->
                                           OnOutput =
@@ -196,11 +203,19 @@ do_eqc(State, Options) ->
                                                   true -> [];
                                                   false -> [{on_output, fun(S, F) -> coloured_output(Mod, S, F) end}]
                                               end,
-                                          Acc ++ [ {Mod, P} || P <- try eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod)
+                                          Acc ++ [ {Mod, P} || P <- try
+                                                                      [ eqc_cover:start() || EqcCover ],
+                                                                      Failed = eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod),
+                                                                      [ begin
+                                                                          Ticks = eqc_cover:stop(atom_to_list(Mod)),
+                                                                          put(cover_ticks, eqc_cover:merge_ticks(Ticks, get(cover_ticks)))
+                                                                        end || EqcCover ],
+                                                                      Failed
                                                                     catch _:_ ->
-                                                                            [{Mod, [module]}]
+                                                                      [module]
                                                                     end ]
                                   end, [], EqcModules),
+                    [ save_eqc_cover_ticks(get(cover_ticks), Options) || EqcCover ],
                     case EQCResults of
                         [] ->
                             cf:print("~!gPassed ~p properties~n", [length(Properties)]);
@@ -216,6 +231,17 @@ do_eqc(State, Options) ->
             %% Only compile, let next command do something sensible with it
             ok
     end.
+
+-spec save_eqc_cover_ticks(eqc_cover:ticks(), map()) -> ok.
+save_eqc_cover_ticks(Ticks, Options) ->
+  case maps:get(eqc_cover_html, Options) of
+    "none" -> ok;
+    OutDir -> eqc_cover:write_html(Ticks, [{out_dir, OutDir}])
+  end,
+  case maps:get(eqc_cover_ticks, Options) of
+    "none" -> ok;
+    File   -> file:write_file(File, term_to_binary(Ticks))
+  end.
 
 -spec load_and_compile(rebar_state:t()) -> rebar_state:t().
 load_and_compile(State) ->
@@ -367,6 +393,15 @@ with_pulse(State, #{pulse := false}) ->
             ok
     end,
     State.
+
+-spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
+with_cover(State, #{eqc_cover := true}) ->
+  rebar_api:info("Compiling with eqc_cover", []),
+  ErlOpts    = rebar_state:get(State, erl_opts, []),
+  NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
+  rebar_state:set(State, erl_opts, NewErlOpts);
+with_cover(State, _) ->
+  State.
 
 check_for_eqc(State, Licence) ->
     DefaultPaths = rebar_state:code_paths(State, default),
