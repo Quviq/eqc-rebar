@@ -29,7 +29,9 @@ init(State) ->
                     {numtests, $n, "numtests", integer, "Set numtests parameter"},
                     {testing_budget, $t, "testing_budget", integer, "Set total testing time in seconds"},
                     {testing_profile, $p, "testing_profile", string, "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
-                    {eqc_cover, undefined, "eqc_cover", boolean, "Cover compile usign eqc_cover"},
+                    {eqc_cover, undefined, "eqc_cover", boolean, "Measure code coverage with eqc_cover"},
+                    {eqc_cover_html, undefined, "eqc_cover_html", string, "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
+                    {eqc_cover_ticks, undefined, "eqc_cover_ticks", string, "File to save cover ticks data (as term_to_binary) or 'none' to not save (default: none)"},
                     {sys_config, undefined, "sys_config", string, "Path to a sys.config file to use"},
                     %%  {counterexample, $c, "counterexample", boolean, "Show counterexample"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
@@ -63,6 +65,8 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
+                                   , eqc_cover_html => "cover-results"
+                                   , eqc_cover_ticks => "none"
                                    , sys_config => undefined
                                    , shell => false
                                    , plain => false
@@ -138,6 +142,7 @@ do(State, Options)->
     %% Parse transform has to be applied to all!
     State1 = def_macros(State, [{d, 'EQC'}]),
     State2 = with_pulse(State1, Options),
+    State3 = with_cover(State2, Options),
 
     Apps = rebar_state:project_apps(State),
     _ = [ begin
@@ -146,7 +151,7 @@ do(State, Options)->
           end || App <- Apps ],
 
     %% merge ErlOpts into existing opts and default
-    ErlOpts = rebar_state:get(State2, erl_opts, []),
+    ErlOpts = rebar_state:get(State3, erl_opts, []),
     NewApps = [ begin
                     SrcDirs = rebar_app_info:get(App, src_dirs, ["src"]),
                     App1 = rebar_app_info:set(App, src_dirs, (SrcDirs -- ["eqc"]) ++ ["eqc"]),
@@ -157,11 +162,11 @@ do(State, Options)->
     %% But we may need to add top level eqc directory to one of the apps
     code:add_pathsa([rebar_app_info:dir(App) || App <- NewApps ]),
 
-    State3 = add_apps_and_virtual(State2, NewApps),
-    State4 = load_and_compile(State3),
+    State4 = add_apps_and_virtual(State3, NewApps),
+    State5 = load_and_compile(State4),
 
-    do_eqc(State4, Options),
-    {ok, State4}.
+    do_eqc(State5, Options),
+    {ok, State5}.
 
 do_eqc(State, Options) ->
     PropDirs = rebar_state:code_paths(State, all_deps),
@@ -189,18 +194,25 @@ do_eqc(State, Options) ->
                                    maps:is_key(testing_profile, Options) ],
 
                     %% TODO handle skip and other results
+                    eqc_cover_init(Options),
                     EQCResults =
                         lists:foldl(fun(Mod, Acc) ->
-                                          OnOutput =
+                                          Format =
                                               case maps:get(plain, Options) of
-                                                  true -> [];
-                                                  false -> [{on_output, fun(S, F) -> coloured_output(Mod, S, F) end}]
+                                                  true  -> fun io:format/2;
+                                                  false -> fun(Fmt, Args) -> coloured_output(Mod, Fmt, Args) end
                                               end,
-                                          Acc ++ [ {Mod, P} || P <- try eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod)
-                                                                    catch _:_ ->
-                                                                            [{Mod, [module]}]
+                                          OnOutput = [{on_output, fun(Fmt, Args) ->
+                                                                    eqc_cover_on_output(Mod, Fmt, Args, Options),
+                                                                    Format(Fmt, Args)
+                                                                  end}],
+                                          Acc ++ [ {Mod, P} || P <- try
+                                                                      eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod)
+                                                                    catch _:Reason:Trace ->
+                                                                      [{module, Reason, Trace}]
                                                                     end ]
                                   end, [], EqcModules),
+                    eqc_cover_save(Options),
                     case EQCResults of
                         [] ->
                             cf:print("~!gPassed ~p properties~n", [length(Properties)]);
@@ -216,6 +228,59 @@ do_eqc(State, Options) ->
             %% Only compile, let next command do something sensible with it
             ok
     end.
+
+-define(COVER_TABLE, eqc_cover_table).
+
+-spec eqc_cover_init(map()) -> ok.
+eqc_cover_init(#{eqc_cover := true}) ->
+  ets:new(?COVER_TABLE, [named_table, public]),
+  ets:insert(?COVER_TABLE, {ticks, []});
+eqc_cover_init(_) -> ok.
+
+%% This is very hacky, but the alternative is reimplementing eqc:module/2 here.
+%% The correct solution is of course to fix eqc:module/2 itself so it can do
+%% per-property coverage.
+eqc_cover_on_output(_Mod, _Fmt, _Args, #{eqc_cover := false}) -> ok;
+eqc_cover_on_output(_Mod, "~w: ", [Prop], _) ->
+  ets:insert(?COVER_TABLE, {prop, Prop}),
+  eqc_cover:start(),
+  ok;
+eqc_cover_on_output(Mod, "~nOK, passed" ++ _, _Args, _) ->
+  eqc_cover_stop(Mod);
+eqc_cover_on_output(Mod, "~nGave up!" ++ _, _Args, _) ->
+  eqc_cover_stop(Mod);
+eqc_cover_on_output(Mod, "After ~w tests" ++ _, _Args, _) ->
+  %% This means we don't measure coverage during shrinking, but that's probably correct?
+  eqc_cover_stop(Mod);
+eqc_cover_on_output(_Mod, _Fmt, _Args, _) ->
+  ok.
+
+eqc_cover_stop(Mod) ->
+  try
+    [{prop, Prop}] = ets:lookup(?COVER_TABLE, prop),
+    ets:delete(?COVER_TABLE, prop),
+    [{ticks, OldTicks}] = ets:lookup(?COVER_TABLE, ticks),
+    NewTicks            = eqc_cover:stop(lists:flatten(io_lib:format("~p:~p", [Mod, Prop]))),
+    Ticks               = eqc_cover:merge_ticks(OldTicks, NewTicks),
+    ets:insert(?COVER_TABLE, {ticks, Ticks})
+  catch _:Reason:Trace ->
+    rebar_api:error("Failed to collect coverage: ~p\n  ~p", [Reason, Trace])
+  end,
+  ok.
+
+-spec eqc_cover_save(map()) -> ok.
+eqc_cover_save(#{eqc_cover := false}) -> ok;
+eqc_cover_save(Options) ->
+  [{ticks, Ticks}] = ets:lookup(?COVER_TABLE, ticks),
+  ets:delete(?COVER_TABLE),
+  case maps:get(eqc_cover_html, Options) of
+    "none" -> ok;
+    OutDir -> eqc_cover:write_html(Ticks, [{out_dir, OutDir}])
+  end,
+  case maps:get(eqc_cover_ticks, Options) of
+    "none" -> ok;
+    File   -> file:write_file(File, term_to_binary(Ticks))
+  end.
 
 -spec load_and_compile(rebar_state:t()) -> rebar_state:t().
 load_and_compile(State) ->
@@ -367,6 +432,15 @@ with_pulse(State, #{pulse := false}) ->
             ok
     end,
     State.
+
+-spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
+with_cover(State, #{eqc_cover := true}) ->
+  rebar_api:info("Compiling with eqc_cover", []),
+  ErlOpts    = rebar_state:get(State, erl_opts, []),
+  NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
+  rebar_state:set(State, erl_opts, NewErlOpts);
+with_cover(State, _) ->
+  State.
 
 check_for_eqc(State, Licence) ->
     DefaultPaths = rebar_state:code_paths(State, default),
