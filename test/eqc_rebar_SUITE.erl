@@ -15,7 +15,9 @@
     plain_output_from_snapshot/1,
     top_level_eqc_from_snapshot/1,
     testing_budget_covers_all_modules/1,
-    testing_budget_scales_work/1
+    testing_budget_scales_work/1,
+    testing_profile_filters_properties/1,
+    testing_profile_budget_stays_per_module/1
 ]).
 
 all() ->
@@ -26,7 +28,9 @@ all() ->
      plain_output_from_snapshot,
      top_level_eqc_from_snapshot,
      testing_budget_covers_all_modules,
-     testing_budget_scales_work].
+     testing_budget_scales_work,
+     testing_profile_filters_properties,
+     testing_profile_budget_stays_per_module].
 
 init_per_suite(Config) ->
     RepoRoot = find_repo_root(filename:dirname(code:which(?MODULE))),
@@ -69,12 +73,14 @@ eqc_passes_from_snapshot(Config) ->
 eqc_fails_from_snapshot(Config) ->
     FixtureDir = prepare_fixture(Config, "failing_property"),
     #{status := Status, output := Output} = run_shell(FixtureDir, "rebar3 eqc --numtests 5"),
-    case {Status =/= 0, contains(Output, "1 properties, 1 failures"),
-                        contains(Output, "Errors running QuickCheck")} of
+    CleanOutput = strip_ansi(Output),
+    case {Status =/= 0,
+          contains(CleanOutput, "sample_fail_eqc:prop_broken:"),
+          contains(CleanOutput, "Errors running QuickCheck")} of
         {true, true, true} ->
             ok;
         _ ->
-            ct:fail({unexpected_eqc_failure_output, Status, Output})
+            ct:fail({unexpected_eqc_failure_output, Status, CleanOutput})
     end.
 
 as_test_eqc_from_snapshot(Config) ->
@@ -115,16 +121,15 @@ testing_budget_covers_all_modules(Config) ->
     FixtureDir = prepare_fixture(Config, "budget_property"),
     #{status := Status, output := Output} = run_shell(FixtureDir, "rebar3 eqc --testing_budget 2"),
     CleanOutput = strip_ansi(Output),
-    Counts = extract_pass_counts(CleanOutput),
+    PropertyCounts = extract_property_pass_counts(CleanOutput),
+    ModuleTotals = module_totals(PropertyCounts),
     case {Status,
-          contains(CleanOutput, "sample_budget_one_eqc:prop_budget_one"),
-          contains(CleanOutput, "sample_budget_two_eqc:prop_budget_two"),
-          length(Counts),
-          lists:all(fun(Count) -> Count > 0 end, Counts)} of
-        {0, true, true, 2, true} ->
+          maps:get("sample_budget_one_eqc", ModuleTotals, 0) > 0,
+          maps:get("sample_budget_two_eqc", ModuleTotals, 0) > 0} of
+        {0, true, true} ->
             ok;
         _ ->
-            ct:fail({unexpected_testing_budget_output, Status, Counts, CleanOutput})
+            ct:fail({unexpected_testing_budget_output, Status, PropertyCounts, CleanOutput})
     end.
 
 testing_budget_scales_work(Config) ->
@@ -133,12 +138,48 @@ testing_budget_scales_work(Config) ->
     #{status := HighStatus, output := HighOutput} = run_shell(FixtureDir, "rebar3 eqc --testing_budget 4"),
     LowCounts = extract_pass_counts(strip_ansi(LowOutput)),
     HighCounts = extract_pass_counts(strip_ansi(HighOutput)),
-    case {LowStatus, HighStatus, length(LowCounts), length(HighCounts),
+    case {LowStatus, HighStatus,
+          length(LowCounts) > 0, length(HighCounts) > 0,
           lists:sum(HighCounts) > lists:sum(LowCounts)} of
-        {0, 0, 2, 2, true} ->
+        {0, 0, true, true, true} ->
             ok;
         _ ->
             ct:fail({testing_budget_did_not_scale, LowCounts, HighCounts, LowOutput, HighOutput})
+    end.
+
+testing_profile_filters_properties(Config) ->
+    FixtureDir = prepare_fixture(Config, "failing_property"),
+    #{status := Status, output := Output} =
+        run_shell(FixtureDir, "rebar3 eqc --numtests 3 --testing_profile focused"),
+    CleanOutput = strip_ansi(Output),
+    case {Status,
+          contains(CleanOutput, "sample_fail_eqc:prop_safe"),
+          not contains(CleanOutput, "sample_fail_eqc:prop_broken:"),
+          not contains(CleanOutput, "Errors running QuickCheck")} of
+        {0, true, true, true} ->
+            ok;
+        _ ->
+            ct:fail({unexpected_testing_profile_output, Status, CleanOutput})
+    end.
+
+testing_profile_budget_stays_per_module(Config) ->
+    FixtureDir = prepare_fixture(Config, "budget_property"),
+    #{status := Status, output := Output} =
+        run_shell(FixtureDir, "rebar3 eqc --testing_budget 4 --testing_profile focused"),
+    CleanOutput = strip_ansi(Output),
+    PropertyCounts = maps:from_list(extract_property_pass_counts(CleanOutput)),
+    OneCount = maps:get({"sample_budget_one_eqc", "prop_budget_one_selected"}, PropertyCounts, 0),
+    TwoCount = maps:get({"sample_budget_two_eqc", "prop_budget_two_selected"}, PropertyCounts, 0),
+    case {Status,
+          OneCount > 0,
+          TwoCount > 0,
+          not contains(CleanOutput, "prop_budget_one_hidden:"),
+          not contains(CleanOutput, "prop_budget_two_hidden:"),
+          abs(OneCount - TwoCount) =< 2} of
+        {0, true, true, true, true, true} ->
+            ok;
+        _ ->
+            ct:fail({unexpected_budget_profile_output, Status, PropertyCounts, CleanOutput})
     end.
 
 make_temp_dir(Prefix) ->
@@ -236,6 +277,31 @@ extract_pass_counts(Text) ->
         nomatch ->
             []
     end.
+
+extract_property_pass_counts(Text) ->
+    Lines = string:split(Text, "\n", all),
+    extract_property_pass_counts(Lines, undefined, []).
+
+extract_property_pass_counts([], _Current, Acc) ->
+    lists:reverse(Acc);
+extract_property_pass_counts([Line | Rest], Current, Acc) ->
+    case re:run(Line, "^([[:alnum:]_]+):([[:alnum:]_]+):", [{capture, all_but_first, list}]) of
+        {match, [Module, Prop]} ->
+            extract_property_pass_counts(Rest, {Module, Prop}, Acc);
+        nomatch ->
+            case {Current, re:run(Line, "^OK, passed ([0-9]+) tests$", [{capture, all_but_first, list}])} of
+                {{Module, Prop}, {match, [Count]}} ->
+                    extract_property_pass_counts(Rest, undefined,
+                                                 [{{Module, Prop}, list_to_integer(Count)} | Acc]);
+                _ ->
+                    extract_property_pass_counts(Rest, Current, Acc)
+            end
+    end.
+
+module_totals(PropertyCounts) ->
+    lists:foldl(fun({{Module, _Prop}, Count}, Acc) ->
+                        maps:update_with(Module, fun(Total) -> Total + Count end, Count, Acc)
+                end, #{}, PropertyCounts).
 
 find_repo_root(Dir) ->
     case {filelib:is_file(filename:join(Dir, "rebar.config")),

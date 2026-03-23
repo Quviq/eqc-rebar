@@ -179,6 +179,8 @@ Current coverage includes:
 - `--plain` output
 - top-level `eqc/` properties in an `apps/*` repository
 - `--testing_budget` behavior across multiple property modules
+- `--testing_profile` passed through to `eqc:module/2` via `property_weight/2`
+- combined `--testing_profile` and `--testing_budget` behavior at module granularity
 
 Fixtures intentionally live under `fixtures/` rather than `test/`, because
 putting toy applications under `test/` makes `rebar3 eunit` try to discover
