@@ -1,4 +1,4 @@
--module(help_eqc).
+-module(sample_pass).
 
 -export([hello/0]).
 
