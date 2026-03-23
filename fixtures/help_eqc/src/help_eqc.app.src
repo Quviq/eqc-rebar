@@ -1,0 +1,8 @@
+{application, help_eqc,
+ [{description, "Fixture app for eqc_rebar Common Test"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, [help_eqc]}
+ ]}.
