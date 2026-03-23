@@ -420,7 +420,7 @@ with_pulse(State, #{pulse := false}) ->
     ErlOpts = rebar_state:get(State, erl_opts, []),
     case lists:member({d, 'PULSE'}, ErlOpts) of
         true ->
-            rebar_api:warn("Macro PULSE defined but --pulse option not specified");
+            rebar_api:warn("Macro PULSE defined but --pulse option not specified", []);
         false ->
             ok
     end,
