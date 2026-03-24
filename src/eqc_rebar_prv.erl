@@ -187,44 +187,50 @@ do_eqc(State, Options) ->
                     TotalBudget = maps:get(testing_budget, Options, 20),
                     Weights = module_weights(EqcModules, Options),
                     TotalWeight = lists:sum([Weight || {_Mod, Weight} <- Weights]),
-                    Numtests = [ {numtests, maps:get(numtests, Options)} ||
-                                    maps:is_key(numtests, Options) ],
-                    Profile  = [ {testing_profile, maps:get(testing_profile, Options)} ||
-                                    maps:is_key(testing_profile, Options) ],
+                    Numtests = [{numtests, maps:get(numtests, Options)} ||
+                                maps:is_key(numtests, Options)],
+                    Profile  = [{testing_profile, maps:get(testing_profile, Options)} ||
+                                maps:is_key(testing_profile, Options)],
 
                     %% TODO handle skip and other results
-                     eqc_cover_init(Options),
-                     EQCResults =
-                         lists:foldl(fun(Mod, Acc) ->
-                                          Budget = [{testing_budget,
-                                                     max(1, TotalBudget * proplists:get_value(Mod, Weights, 1)
-                                                             div max(1, TotalWeight))} ||
-                                                       maps:is_key(testing_budget, Options) orelse
-                                                           not maps:is_key(numtests, Options) ],
-                                          Format =
-                                              case maps:get(plain, Options) of
-                                                  true  -> fun io:format/2;
-                                                  false -> fun(Fmt, Args) -> coloured_output(Mod, Fmt, Args) end
-                                              end,
-                                          OnOutput = [{on_output, fun(Fmt, Args) ->
-                                                                    eqc_cover_on_output(Mod, Fmt, Args, Options),
-                                                                    Format(Fmt, Args)
-                                                                  end}],
-                                          Acc ++ [ {Mod, P} || P <- try
-                                                                      eqc:module(Budget ++ Numtests ++ OnOutput ++ Profile, Mod)
-                                                                    catch _:Reason:Trace ->
-                                                                      [{module, Reason, Trace}]
-                                                                    end ]
-                                   end, [], EqcModules),
-                     eqc_cover_save(Options),
-                     case EQCResults of
-                         [] ->
+                    eqc_cover_init(Options),
+                    EQCResults =
+                        lists:foldl(fun(Mod, Acc) ->
+                                        Budget =
+                                            [{testing_budget,
+                                              max(1, TotalBudget * proplists:get_value(Mod, Weights, 1)
+                                                      div max(1, TotalWeight))} ||
+                                                maps:is_key(testing_budget, Options) orelse
+                                                    not maps:is_key(numtests, Options)],
+                                        Format =
+                                            case maps:get(plain, Options) of
+                                                true  -> fun io:format/2;
+                                                false -> fun(Fmt, Args) ->
+                                                             coloured_output(Mod, Fmt, Args)
+                                                         end
+                                            end,
+                                        OnOutput =
+                                            [{on_output, fun(Fmt, Args) ->
+                                                             eqc_cover_on_output(Mod, Fmt, Args, Options),
+                                                             Format(Fmt, Args)
+                                                         end}],
+                                        Acc ++ [{Mod, P} || P <- try
+                                                                  eqc:module(Budget ++ Numtests ++
+                                                                             OnOutput ++ Profile, Mod)
+                                                              catch _:Reason:Trace ->
+                                                                  [{module, Reason, Trace}]
+                                                              end]
+                                    end, [], EqcModules),
+                    eqc_cover_save(Options),
+                    case EQCResults of
+                        [] ->
                             cf:print("~!gPassed ~p properties~n", [length(Properties)]);
                         Failed ->
-                            cf:print("~!r~p properties, ~p failures ~!!~n", [length(Properties), length(Failed)]),
-                             cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
-                             rebar_api:abort("Errors running QuickCheck", [])
-                       end
+                            cf:print("~!r~p properties, ~p failures ~!!~n",
+                                     [length(Properties), length(Failed)]),
+                            cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
+                            rebar_api:abort("Errors running QuickCheck", [])
+                    end
             end;
         {true, _} ->
             rebar_prv_shell:do(State);
@@ -363,10 +369,8 @@ coloured_output(_, S, F) ->
 -spec module_weights([atom()], map()) -> [{atom(), pos_integer()}].
 module_weights(Mods, Options) ->
     Profile = maps:get(testing_profile, Options, undefined),
-    [begin
-         Weight = module_weight(Mod, Profile, maps:get(module_weights, Options, [])),
-         {Mod, Weight}
-     end || Mod <- Mods].
+    [{Mod, module_weight(Mod, Profile, maps:get(module_weights, Options, []))} ||
+        Mod <- Mods].
 
 module_weight(Mod, Profile, ConfigWeights) ->
     case config_module_weight(Mod, Profile, ConfigWeights) of

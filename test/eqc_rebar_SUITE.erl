@@ -191,9 +191,11 @@ testing_profile_budget_stays_per_module(Config) ->
 
 config_module_weights_override_callbacks(Config) ->
     FixtureDir = prepare_fixture(Config, "budget_property"),
-    ok = append_to_file(filename:join(FixtureDir, "rebar.config"),
-                        "\n{eqc, [{module_weights, [{sample_budget_one_eqc, 4},\n"
-                        "                        {sample_budget_two_eqc, 1}]}]}.\n"),
+    ok =
+        append_to_file(filename:join(FixtureDir, "rebar.config"),
+                       "\n{eqc, [{module_weights,\n"
+                       "        [{sample_budget_one_eqc, 4},\n"
+                       "         {sample_budget_two_eqc, 1}]}]}.\n"),
     #{status := Status, output := Output} =
         run_shell(FixtureDir, "rebar3 eqc --testing_budget 4 --testing_profile focused"),
     CleanOutput = strip_ansi(Output),
@@ -367,7 +369,8 @@ extract_property_pass_counts([Line | Rest], Current, Acc) ->
         {match, [Module, Prop]} ->
             extract_property_pass_counts(Rest, {Module, Prop}, Acc);
         nomatch ->
-            case {Current, re:run(Line, "^OK, passed ([0-9]+) tests$", [{capture, all_but_first, list}])} of
+            case {Current,
+                  re:run(Line, "^OK, passed ([0-9]+) tests$", [{capture, all_but_first, list}])} of
                 {{Module, Prop}, {match, [Count]}} ->
                     extract_property_pass_counts(Rest, undefined,
                                                  [{{Module, Prop}, list_to_integer(Count)} | Acc]);
