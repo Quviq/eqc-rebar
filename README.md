@@ -153,11 +153,6 @@ Run the full test suite with:
 rebar3 ct
 ```
 
-Run just the plugin test suite with:
-```bash
-rebar3 ct --suite test/eqc_rebar_SUITE
-```
-
 Run a single test case with:
 ```bash
 rebar3 ct --suite test/eqc_rebar_SUITE --case help_eqc_from_snapshot
@@ -181,7 +176,7 @@ Current coverage includes:
 - `--testing_budget` behavior across multiple property modules
 - `--testing_profile` passed through to `eqc:module/2` via `property_weight/2`
 - combined `--testing_profile` and `--testing_budget` behavior at module granularity
-- `--eqc_cover` output generation and `none` suppression for html/ticks files
+- `--eqc_cover` output generation, html/ticks suppression with `none`, and content-level coverage checks for covered and uncovered code
 
 Fixtures intentionally live under `fixtures/` rather than `test/`, because
 putting toy applications under `test/` makes `rebar3 eunit` try to discover
