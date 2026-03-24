@@ -19,6 +19,7 @@
     testing_budget_scales_work/1,
     testing_profile_filters_properties/1,
     testing_profile_budget_stays_per_module/1,
+    config_module_weights_override_callbacks/1,
     eqc_cover_writes_outputs/1,
     eqc_cover_none_suppresses_outputs/1
 ]).
@@ -34,6 +35,7 @@ all() ->
      testing_budget_scales_work,
      testing_profile_filters_properties,
      testing_profile_budget_stays_per_module,
+     config_module_weights_override_callbacks,
      eqc_cover_writes_outputs,
      eqc_cover_none_suppresses_outputs].
 
@@ -180,11 +182,32 @@ testing_profile_budget_stays_per_module(Config) ->
           TwoCount > 0,
           not contains(CleanOutput, "prop_budget_one_hidden:"),
           not contains(CleanOutput, "prop_budget_two_hidden:"),
-          abs(OneCount - TwoCount) =< 2} of
+          TwoCount > OneCount} of
         {0, true, true, true, true, true} ->
             ok;
         _ ->
             ct:fail({unexpected_budget_profile_output, Status, PropertyCounts, CleanOutput})
+    end.
+
+config_module_weights_override_callbacks(Config) ->
+    FixtureDir = prepare_fixture(Config, "budget_property"),
+    ok = append_to_file(filename:join(FixtureDir, "rebar.config"),
+                        "\n{eqc, [{module_weights, [{sample_budget_one_eqc, 4},\n"
+                        "                        {sample_budget_two_eqc, 1}]}]}.\n"),
+    #{status := Status, output := Output} =
+        run_shell(FixtureDir, "rebar3 eqc --testing_budget 4 --testing_profile focused"),
+    CleanOutput = strip_ansi(Output),
+    PropertyCounts = maps:from_list(extract_property_pass_counts(CleanOutput)),
+    OneCount = maps:get({"sample_budget_one_eqc", "prop_budget_one_selected"}, PropertyCounts, 0),
+    TwoCount = maps:get({"sample_budget_two_eqc", "prop_budget_two_selected"}, PropertyCounts, 0),
+    case {Status,
+          OneCount > 0,
+          TwoCount > 0,
+          OneCount > TwoCount} of
+        {0, true, true, true} ->
+            ok;
+        _ ->
+            ct:fail({unexpected_config_module_weight_output, Status, PropertyCounts, CleanOutput})
     end.
 
 eqc_cover_writes_outputs(Config) ->
@@ -285,6 +308,9 @@ inject_plugin_url(RebarConfigPath, PluginUrl) ->
     Updated = binary:replace(Contents, <<"__PLUGIN_URL__">>,
                              unicode:characters_to_binary(PluginUrl), [global]),
     ok = file:write_file(RebarConfigPath, Updated).
+
+append_to_file(Path, Text) ->
+    file:write_file(Path, unicode:characters_to_binary(Text), [append]).
 
 assert_shell_success(#{status := 0}) ->
     ok;

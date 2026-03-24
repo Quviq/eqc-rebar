@@ -180,23 +180,27 @@ do_eqc(State, Options) ->
             case length(EqcModules) of
                 0 ->
                     rebar_api:warn("No properties found: ~p", [ PropDirs ]);
-                NrModules ->
+                _NrModules ->
                     rebar_api:info("Found following properties: ~p", [ Properties ]),
 
                     %% Define a testing budget if numtests not explicitly specified
                     TotalBudget = maps:get(testing_budget, Options, 20),
-                    Budget = [{testing_budget, max(1, TotalBudget div NrModules)} ||
-                                 maps:is_key(testing_budget, Options) orelse
-                                     not maps:is_key(numtests, Options) ],
+                    Weights = module_weights(EqcModules, Options),
+                    TotalWeight = lists:sum([Weight || {_Mod, Weight} <- Weights]),
                     Numtests = [ {numtests, maps:get(numtests, Options)} ||
-                                   maps:is_key(numtests, Options) ],
+                                    maps:is_key(numtests, Options) ],
                     Profile  = [ {testing_profile, maps:get(testing_profile, Options)} ||
-                                   maps:is_key(testing_profile, Options) ],
+                                    maps:is_key(testing_profile, Options) ],
 
                     %% TODO handle skip and other results
-                    eqc_cover_init(Options),
-                    EQCResults =
-                        lists:foldl(fun(Mod, Acc) ->
+                     eqc_cover_init(Options),
+                     EQCResults =
+                         lists:foldl(fun(Mod, Acc) ->
+                                          Budget = [{testing_budget,
+                                                     max(1, TotalBudget * proplists:get_value(Mod, Weights, 1)
+                                                             div max(1, TotalWeight))} ||
+                                                       maps:is_key(testing_budget, Options) orelse
+                                                           not maps:is_key(numtests, Options) ],
                                           Format =
                                               case maps:get(plain, Options) of
                                                   true  -> fun io:format/2;
@@ -211,16 +215,16 @@ do_eqc(State, Options) ->
                                                                     catch _:Reason:Trace ->
                                                                       [{module, Reason, Trace}]
                                                                     end ]
-                                  end, [], EqcModules),
-                    eqc_cover_save(Options),
-                    case EQCResults of
-                        [] ->
+                                   end, [], EqcModules),
+                     eqc_cover_save(Options),
+                     case EQCResults of
+                         [] ->
                             cf:print("~!gPassed ~p properties~n", [length(Properties)]);
                         Failed ->
                             cf:print("~!r~p properties, ~p failures ~!!~n", [length(Properties), length(Failed)]),
-                            cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
-                            rebar_api:abort("Errors running QuickCheck", [])
-                      end
+                             cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
+                             rebar_api:abort("Errors running QuickCheck", [])
+                       end
             end;
         {true, _} ->
             rebar_prv_shell:do(State);
@@ -355,6 +359,112 @@ coloured_output(_, "~nOK, passed ~w tests~n", [N]) ->
     cf:print("~!gOK, passed ~w tests~!!~n", [N]);
 coloured_output(_, S, F) ->
     cf:print(S, F).
+
+-spec module_weights([atom()], map()) -> [{atom(), pos_integer()}].
+module_weights(Mods, Options) ->
+    Profile = maps:get(testing_profile, Options, undefined),
+    [begin
+         Weight = module_weight(Mod, Profile, maps:get(module_weights, Options, [])),
+         {Mod, Weight}
+     end || Mod <- Mods].
+
+module_weight(Mod, Profile, ConfigWeights) ->
+    case config_module_weight(Mod, Profile, ConfigWeights) of
+        undefined ->
+            callback_module_weight(Mod, Profile);
+        Weight ->
+            Weight
+    end.
+
+config_module_weight(Mod, Profile, ConfigWeights) when is_list(ConfigWeights) ->
+    GlobalWeights =
+        [validate_weight(Mod, Weight) || {CfgMod, Weight} <- ConfigWeights,
+                                         CfgMod =:= Mod,
+                                         is_integer(Weight)],
+    ProfileWeights =
+        case Profile of
+            undefined ->
+                [];
+            _ ->
+                [validate_weight(Mod, Weight) ||
+                    {CfgProfile, Weights} <- ConfigWeights,
+                    is_list(Weights),
+                    profile_matches(CfgProfile, Profile),
+                    {CfgMod, Weight} <- Weights,
+                    CfgMod =:= Mod]
+        end,
+    case ProfileWeights ++ GlobalWeights of
+        [Weight | _] ->
+            Weight;
+        [] ->
+            undefined
+    end;
+config_module_weight(_Mod, _Profile, undefined) ->
+    undefined;
+config_module_weight(_Mod, _Profile, ConfigWeights) ->
+    rebar_api:abort("Invalid module_weights config: ~p", [ConfigWeights]).
+
+callback_module_weight(Mod, Profile) ->
+    case callback_module_weight_1(Mod, Profile) of
+        undefined ->
+            case erlang:function_exported(Mod, eqc_module_weight, 0) of
+                true ->
+                    validate_weight(Mod, Mod:eqc_module_weight());
+                false ->
+                    1
+            end;
+        Weight ->
+            Weight
+    end.
+
+callback_module_weight_1(Mod, Profile) ->
+    case erlang:function_exported(Mod, eqc_module_weight, 1) of
+        false ->
+            undefined;
+        true ->
+            try_profile_candidates(Mod, profile_candidates(Profile))
+    end.
+
+try_profile_candidates(_Mod, []) ->
+    undefined;
+try_profile_candidates(Mod, [Candidate | Rest]) ->
+    try
+        validate_weight(Mod, Mod:eqc_module_weight(Candidate))
+    catch
+        error:function_clause ->
+            try_profile_candidates(Mod, Rest)
+    end.
+
+profile_candidates(undefined) ->
+    [undefined];
+profile_candidates(Profile) when is_atom(Profile) ->
+    [Profile, atom_to_list(Profile)];
+profile_candidates(Profile) when is_binary(Profile) ->
+    profile_candidates(binary_to_list(Profile));
+profile_candidates(Profile) when is_list(Profile) ->
+    case catch list_to_existing_atom(Profile) of
+        Atom when is_atom(Atom) ->
+            [Profile, Atom];
+        _ ->
+            [Profile]
+    end;
+profile_candidates(Profile) ->
+    [Profile].
+
+profile_matches(ConfigProfile, RequestedProfile) ->
+    profile_key(ConfigProfile) =:= profile_key(RequestedProfile).
+
+profile_key(Profile) when is_atom(Profile) ->
+    atom_to_list(Profile);
+profile_key(Profile) when is_binary(Profile) ->
+    binary_to_list(Profile);
+profile_key(Profile) ->
+    Profile.
+
+validate_weight(_Mod, Weight) when is_integer(Weight), Weight > 0 ->
+    Weight;
+validate_weight(Mod, Weight) ->
+    rebar_api:abort("Invalid module weight for ~p: ~p", [Mod, Weight]).
 
 -spec select_properties([ file:filename() ]) -> {[atom()], [{atom(), atom(), 0}]}.
 select_properties(ProjectDirs) ->
