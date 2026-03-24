@@ -1,6 +1,7 @@
 -module(eqc_rebar_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -export([
     all/0,
@@ -17,7 +18,9 @@
     testing_budget_covers_all_modules/1,
     testing_budget_scales_work/1,
     testing_profile_filters_properties/1,
-    testing_profile_budget_stays_per_module/1
+    testing_profile_budget_stays_per_module/1,
+    eqc_cover_writes_outputs/1,
+    eqc_cover_none_suppresses_outputs/1
 ]).
 
 all() ->
@@ -30,7 +33,9 @@ all() ->
      testing_budget_covers_all_modules,
      testing_budget_scales_work,
      testing_profile_filters_properties,
-     testing_profile_budget_stays_per_module].
+     testing_profile_budget_stays_per_module,
+     eqc_cover_writes_outputs,
+     eqc_cover_none_suppresses_outputs].
 
 init_per_suite(Config) ->
     RepoRoot = find_repo_root(filename:dirname(code:which(?MODULE))),
@@ -182,6 +187,53 @@ testing_profile_budget_stays_per_module(Config) ->
             ct:fail({unexpected_budget_profile_output, Status, PropertyCounts, CleanOutput})
     end.
 
+eqc_cover_writes_outputs(Config) ->
+    FixtureDir = prepare_fixture(Config, "passing_property"),
+    #{status := Status, output := Output} =
+        run_shell(FixtureDir,
+                  "rebar3 eqc --numtests 4 --eqc_cover --eqc_cover_ticks cover.ticks "
+                  "--eqc_cover_html cover-html"),
+    CleanOutput = strip_ansi(Output),
+    TicksFile = filename:join(FixtureDir, "cover.ticks"),
+    HtmlIndex = filename:join([FixtureDir, "cover-html", "index.html"]),
+    SourceHtml = filename:join([FixtureDir, "cover-html", "sample_pass.erl.html"]),
+    Ticks = read_cover_ticks(TicksFile),
+    SourceHtmlContent = read_text_file(SourceHtml),
+    case {Status,
+          contains(CleanOutput, "Coverage of "),
+          contains(CleanOutput, "sample_pass.erl: 50.0%"),
+          filelib:is_file(TicksFile),
+          filelib:is_file(HtmlIndex),
+          file_size(TicksFile) > 0,
+          contains(SourceHtmlContent, "class=red"),
+          contains(SourceHtmlContent, "uncovered"),
+          cover_ticks_contains_module(Ticks, sample_pass),
+          cover_ticks_contains_label(Ticks, "sample_pass_eqc:prop_reverse_reverse")} of
+        {0, true, true, true, true, true, true, true, true, true} ->
+            ok;
+        _ ->
+            ct:fail({unexpected_eqc_cover_output, Status, CleanOutput, Ticks, SourceHtmlContent})
+    end.
+
+eqc_cover_none_suppresses_outputs(Config) ->
+    FixtureDir = prepare_fixture(Config, "passing_property"),
+    #{status := Status, output := Output} =
+        run_shell(FixtureDir,
+                  "rebar3 eqc --numtests 4 --eqc_cover --eqc_cover_ticks none "
+                  "--eqc_cover_html none"),
+    CleanOutput = strip_ansi(Output),
+    TicksFile = filename:join(FixtureDir, "cover.ticks"),
+    HtmlDir = filename:join(FixtureDir, "cover-html"),
+    case {Status,
+          not contains(CleanOutput, "Coverage of "),
+          not filelib:is_file(TicksFile),
+          not filelib:is_dir(HtmlDir)} of
+        {0, true, true, true} ->
+            ok;
+        _ ->
+            ct:fail({unexpected_eqc_cover_none_output, Status, CleanOutput, TicksFile, HtmlDir})
+    end.
+
 make_temp_dir(Prefix) ->
     Base = case os:getenv("TMPDIR") of
                false -> "/tmp";
@@ -302,6 +354,58 @@ module_totals(PropertyCounts) ->
     lists:foldl(fun({{Module, _Prop}, Count}, Acc) ->
                         maps:update_with(Module, fun(Total) -> Total + Count end, Count, Acc)
                 end, #{}, PropertyCounts).
+
+file_size(Path) ->
+    case file:read_file_info(Path) of
+        {ok, #file_info{size = Size}} ->
+            Size;
+        _ ->
+            0
+    end.
+
+read_cover_ticks(Path) ->
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            erlang:binary_to_term(Bin);
+        Error ->
+            Error
+    end.
+
+read_text_file(Path) ->
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            unicode:characters_to_list(Bin);
+        _ ->
+            ""
+    end.
+
+cover_ticks_contains_module(Ticks, Module) when is_list(Ticks) ->
+    lists:any(fun({TickModule, _}) -> TickModule =:= Module;
+                 (_) -> false
+              end, Ticks);
+cover_ticks_contains_module(_, _) ->
+    false.
+
+cover_ticks_contains_label(Ticks, Label) when is_list(Ticks) ->
+    lists:any(fun({_Module, Entries}) ->
+                      entries_contain_label(Entries, Label)
+              end, Ticks);
+cover_ticks_contains_label(_, _) ->
+    false.
+
+entries_contain_label(Entries, Label) when is_list(Entries) ->
+    lists:any(fun({_Line, Calls}) ->
+                      calls_contain_label(Calls, Label)
+              end, Entries);
+entries_contain_label(_, _) ->
+    false.
+
+calls_contain_label(Calls, Label) when is_list(Calls) ->
+    lists:any(fun({CallLabel, _Count}) -> CallLabel =:= Label;
+                 (_) -> false
+              end, Calls);
+calls_contain_label(_, _) ->
+    false.
 
 find_repo_root(Dir) ->
     case {filelib:is_file(filename:join(Dir, "rebar.config")),

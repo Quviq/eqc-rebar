@@ -1,6 +1,9 @@
 -module(sample_pass).
 
--export([hello/0]).
+-export([covered/0, uncovered/0]).
 
-hello() ->
+covered() ->
     ok.
+
+uncovered() ->
+    not_covered.
