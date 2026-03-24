@@ -142,6 +142,47 @@ EQC options
 --pulse
 
 
+Testing this plugin
+===
+
+The plugin now has an end-to-end Common Test harness that exercises
+`rebar3` against toy projects instead of only unit-testing provider internals.
+
+Run the full test suite with:
+```bash
+rebar3 ct
+```
+
+Run a single test case with:
+```bash
+rebar3 ct --suite test/eqc_rebar_SUITE --case help_eqc_from_snapshot
+```
+
+The harness works by:
+- copying a fixture project from `fixtures/`
+- snapshotting the current working tree into a temporary local git repository
+- injecting that snapshot as the plugin source in the fixture `rebar.config`
+- running real `rebar3` commands and asserting on output and exit status
+
+This keeps the tests close to how users actually invoke the plugin while still
+including local uncommitted changes.
+
+Current coverage includes:
+- plugin registration through `rebar3 help eqc`
+- passing and failing `rebar3 eqc` runs
+- `rebar3 as test eqc` with properties in both `eqc/` and `test/`
+- `--plain` output
+- top-level `eqc/` properties in an `apps/*` repository
+- `--testing_budget` behavior across multiple property modules
+- `--testing_profile` passed through to `eqc:module/2` via `property_weight/2`
+- combined `--testing_profile` and `--testing_budget` behavior at module granularity
+- `--eqc_cover` output generation, html/ticks suppression with `none`, and content-level coverage checks for covered and uncovered code
+
+Fixtures intentionally live under `fixtures/` rather than `test/`, because
+putting toy applications under `test/` makes `rebar3 eunit` try to discover
+them as project test modules.
+
+
 TODO
 ---
 

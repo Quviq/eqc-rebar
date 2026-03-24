@@ -1,0 +1,8 @@
+{application, sample_budget,
+ [{description, "Testing budget fixture"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, [sample_budget]}
+ ]}.

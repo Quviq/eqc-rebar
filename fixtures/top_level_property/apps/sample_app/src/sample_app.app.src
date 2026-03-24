@@ -1,0 +1,8 @@
+{application, sample_app,
+ [{description, "Top-level eqc fixture app"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, [sample_app]}
+ ]}.
