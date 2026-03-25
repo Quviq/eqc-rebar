@@ -32,7 +32,8 @@ For downstream usage examples of the plugin itself, the README is the source of 
 - If the repository has a top-level `eqc/` directory and no root application, `build_root_extras/2` synthesizes a virtual application named `properties` so root-level properties can still compile.
 - Compilation is delegated back to `rebar_prv_compile:do/1`; property discovery happens after compilation by scanning compiled `.beam` exports, not by parsing source files.
 - A function is treated as a QuickCheck property only if it is an exported zero-arity function whose name starts with `prop_`. `select_properties/1` is the discovery point to update if that rule changes.
-- Running the provider normally calls `eqc:module/2` for each discovered property module. The testing budget is split evenly per module unless `--numtests` is explicitly set.
+- Running the provider normally calls `eqc:module/2` for each discovered property module. The testing budget is split per module weight unless `--numtests` is explicitly set.
+- Module weights come from `eqc_module_weight/1` or `eqc_module_weight/0` callbacks in the property module, and can be overridden from `rebar.config` with `{eqc, [{module_weights, [{foo_eqc, 3}]}]}`.
 - `--shell` skips property execution and hands off to `rebar_prv_shell:do/1`. `--compile` stops after compilation.
 
 ## Key conventions
@@ -45,6 +46,7 @@ For downstream usage examples of the plugin itself, the README is the source of 
   - `rebar3 as test eqc` compiles both `test` and `eqc` directories, but it does not run EUnit tests.
 - Keep fixture projects under `fixtures/`, not under `test/`. Putting toy OTP apps under `test/` makes `rebar3 eunit` try to discover them as project test modules.
 - Follow the repository's property naming convention in fixtures and examples: a module like `foo` is paired with a property module like `foo_eqc`.
+- If you change budget allocation, keep the precedence consistent: `rebar.config` `module_weights` override module callbacks, `eqc_module_weight/1` is preferred over `eqc_module_weight/0`, and the fallback weight is `1`.
 - When changing property discovery, remember that this plugin works from compiled beam exports. Unexported `prop_*` functions are invisible to the runner.
 - When changing compile-time behavior, update both provider state and app metadata consistently. The current flow updates global `erl_opts`, then updates each app's `src_dirs` and per-app opts before recompiling.
 - `--pulse` is intentionally stateful: it appends the `pulse` profile if missing and injects both the `PULSE` macro and `pulse_instrument` parse transform unless `--auto_instrument false` is used.

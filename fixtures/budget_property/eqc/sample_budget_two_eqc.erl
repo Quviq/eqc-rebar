@@ -2,7 +2,8 @@
 
 -include_lib("eqc/include/eqc.hrl").
 
--export([prop_budget_two_selected/0, prop_budget_two_hidden/0, property_weight/2]).
+-export([prop_budget_two_selected/0, prop_budget_two_hidden/0,
+         property_weight/2, eqc_module_weight/1]).
 
 prop_budget_two_selected() ->
     ?FORALL(N, int(),
@@ -23,4 +24,9 @@ property_weight("focused", prop_budget_two_selected) ->
 property_weight("focused", prop_budget_two_hidden) ->
     0;
 property_weight(_, _) ->
+    1.
+
+eqc_module_weight("focused") ->
+    3;
+eqc_module_weight(_) ->
     1.

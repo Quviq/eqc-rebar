@@ -48,8 +48,18 @@ additional settings in this profile will be used.
 
 After compilation, all QuickCheck properties found are checked with
 Quviq's quickcheck. The total testing time is by default 20 seconds
-and can be adjusted by the `testing_budget` option. The budget is
-devided equally over the number of modules provided.
+and can be adjusted by the `testing_budget` option. By default the
+budget is divided equally over the number of property modules
+provided, but this can be weighted per module.
+
+Module budget weights can be provided in two ways:
+
+- in the property module itself with `eqc_module_weight/1` or
+  `eqc_module_weight/0`
+- in `rebar.config` with `{eqc, [{module_weights, [{foo_eqc, 3}]}]}`
+
+If both are present, `rebar.config` wins. Within the module callback,
+`eqc_module_weight/1` is preferred over `eqc_module_weight/0`.
 
 Other users of  your repository, not having a licence, can use your
 software, but cannot check the properties. The `eqc` directory can be 
