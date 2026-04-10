@@ -23,17 +23,32 @@ init(State) ->
             {bare, true},                 % The task can be run by the user, always true
             {deps, ?DEPS},                % The list of dependencies
             {example, "rebar3 quickcheck"}, % How to use the plugin
-            {opts, [{pulse, $P, "pulse", boolean, "Compile with 'PULSE' macro and pulse_instrument parse transform"},
-                    {auto_instrument, undefined, "auto_instrument", boolean, "With --pulse set to false for no additional parse_transform"},
-                    %% {dir, $d, "dir", string, help(dir)},
-                    {numtests, $n, "numtests", integer, "Set numtests parameter"},
-                    {testing_budget, $t, "testing_budget", integer, "Set total testing time in seconds"},
-                    {testing_profile, $p, "testing_profile", string, "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
-                    {eqc_cover, undefined, "eqc_cover", boolean, "Measure code coverage with eqc_cover"},
-                    {eqc_cover_html, undefined, "eqc_cover_html", string, "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
-                    {eqc_cover_ticks, undefined, "eqc_cover_ticks", string, "File to save cover ticks data (as term_to_binary) or 'none' to not save (default: none)"},
-                    {sys_config, undefined, "sys_config", string, "Path to a sys.config file to use"},
-                    %%  {counterexample, $c, "counterexample", boolean, "Show counterexample"},
+            {opts, [{pulse, $P, "pulse", boolean,
+                     "Compile with 'PULSE' macro and pulse_instrument parse transform"},
+                    {auto_instrument, undefined, "auto_instrument", boolean,
+                     "With --pulse set to false for no additional parse_transform"},
+                    {numtests, $n, "numtests", integer,
+                     "Set numtests parameter"},
+                    {testing_budget, $t, "testing_budget", integer,
+                     "Set total testing time in seconds"},
+                    {testing_profile, $p, "testing_profile", string,
+                     "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
+                    {eqc_cover, undefined, "eqc_cover", boolean,
+                     "Measure code coverage with eqc_cover. "
+                     "Compiles files with eqc_cover, unless eqc_cover_nocompile is set."},
+                    {eqc_cover_nocompile, undefined, "eqc_cover_nocompile", boolean,
+                     "If set, does not compiles with eqc_cover. Compilation can be manually crafted elsewhere."},
+                    {eqc_cover_html, undefined, "eqc_cover_html", string,
+                     "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
+                    {eqc_cover_ticks, undefined, "eqc_cover_ticks", string,
+                     "File to save cover ticks data (as term_to_binary) or 'none' to not save (default: none)"},
+                    {sys_config, undefined, "sys_config", string,
+                     "Path to a sys.config file to use"},
+                    %%  {counterexample, undefined, "counterexample", boolean, "Show counterexample"},
+                    {property, undefined, "property", atom,
+                     "Resitrict checking to property with this name (can be used multiple times"},
+                    {module, undefined, "module", atom,
+                     "Resitrict checking to properties in this module/these modules (can be used multiple times)"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
                     {shell, $s, "shell", boolean, "Enter and Erlang shell"},
                     {compile, $c, "compile", boolean, "Only compile code, do not run quickcheck"},
@@ -65,9 +80,12 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
+                                   , eqc_cover_nocompile => false  %% defaut is compiling with eqc_cover
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
+                                   , properties => undefined
+                                   , modules => undefined
                                    , shell => false
                                    , plain => false
                                    , install => false
@@ -548,7 +566,7 @@ with_pulse(State, #{pulse := false}) ->
     State.
 
 -spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
-with_cover(State, #{eqc_cover := true}) ->
+with_cover(State, #{eqc_cover := true, eqc_cover_nocompile := false}) ->
   rebar_api:info("Compiling with eqc_cover", []),
   ErlOpts    = rebar_state:get(State, erl_opts, []),
   NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
@@ -614,7 +632,13 @@ format_error(Reason) ->
 set_defaults(State, Defaults) ->
     ConfigOptions = maps:from_list(rebar_state:get(State, ?PROVIDER, [])),
     {Args, _} = rebar_state:command_parsed_args(State),
-    ArgOptions = maps:from_list(Args),
+    Props = lists:uniq([ V || {property, V} <- Args ]),
+    Mods = lists:uniq([ V || {module, V} <- Args ]),
+    DupArgs =
+      [{properties, Props} || Props /= [] ] ++
+      [{modules, Mods} || Mods /= [] ] ++
+      [ {K, V} || {K, V} <- Args, not lists:member(K, [property, module]) ],
+    ArgOptions = maps:from_list(DupArgs),
     maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)).
 
 setup_name(State) ->
