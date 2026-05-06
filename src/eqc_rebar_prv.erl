@@ -36,8 +36,9 @@ init(State) ->
                     {eqc_cover, undefined, "eqc_cover", boolean,
                      "Measure code coverage with eqc_cover. "
                      "Compiles files with eqc_cover, unless eqc_cover_nocompile is set."},
-                    {eqc_cover_nocompile, undefined, "eqc_cover_nocompile", boolean,
-                     "If set, does not compiles with eqc_cover. Compilation can be manually crafted elsewhere."},
+                    {eqc_cover_compile, undefined, "auto_cover_compile", boolean,
+                     "With --eqc_cover set to false for disabling automatic compilation with eqc_cover. "
+                     "Compilation can be manually crafted elsewhere."},
                     {eqc_cover_html, undefined, "eqc_cover_html", string,
                      "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
                     {eqc_cover_ticks, undefined, "eqc_cover_ticks", string,
@@ -46,7 +47,7 @@ init(State) ->
                      "Path to a sys.config file to use"},
                     %%  {counterexample, undefined, "counterexample", boolean, "Show counterexample"},
                     {property, undefined, "property", atom,
-                     "Resitrict checking to property with this name (can be used multiple times"},
+                     "Resitrict checking to property with this name (can be used multiple times)"},
                     {module, undefined, "module", atom,
                      "Resitrict checking to properties in this module/these modules (can be used multiple times)"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
@@ -80,12 +81,12 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
-                                   , eqc_cover_nocompile => false  %% defaut is compiling with eqc_cover
+                                   , eqc_cover_compile => true  %% defaut is compiling with eqc_cover
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
-                                   , properties => undefined
-                                   , modules => undefined
+                                   , properties => []
+                                   , modules => []
                                    , shell => false
                                    , plain => false
                                    , install => false
@@ -189,7 +190,7 @@ do(State, Options)->
 do_eqc(State, Options) ->
     PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
-    {EqcModules, Properties} = select_properties(PropDirs),
+    {EqcModules, Properties} = select_properties(PropDirs, maps:with([modules, properties], Options)),
 
     case {maps:get(shell, Options), maps:get(compile, Options)} of
         {false, false} ->
@@ -488,8 +489,8 @@ validate_weight(_Mod, Weight) when is_integer(Weight), Weight > 0 ->
 validate_weight(Mod, Weight) ->
     rebar_api:abort("Invalid module weight for ~p: ~p", [Mod, Weight]).
 
--spec select_properties([ file:filename() ]) -> {[atom()], [{atom(), atom(), 0}]}.
-select_properties(ProjectDirs) ->
+-spec select_properties([ file:filename() ], #{modules := list(atom()), properties := list(atom())}) -> {[atom()], [{atom(), atom(), 0}]}.
+select_properties(ProjectDirs, Opts) ->
     %% After compilation, files are already loaded
     Files =
         lists:foldl(fun(Dir, Fs) ->
@@ -511,7 +512,14 @@ select_properties(ProjectDirs) ->
                               [ {Mod, Name, 0} || {Name, 0} <- Mod:module_info(exports),
                                                   lists:prefix("prop_", atom_to_list(Name))] ++ Props
                       end, [], Files)),
-    {lists:usort([M || {M,_,_} <- Properties]), Properties}.
+    Modules = maps:get(modules, Opts, []),
+    Props = maps:get(properties, Opts, []),
+    RestrictedProperties =
+      [ T || {M,P,_} = T <- Properties,
+             Modules == [] orelse lists:member(M, Modules),
+             Props == [] orelse lists:member(P, Props) ],
+    rebar_api:info("Restrictions apply. Not checking ~p", [Properties -- RestrictedProperties]),
+    {lists:usort([M || {M,_,_} <- RestrictedProperties]), RestrictedProperties}.
 
 %% Macro definitions of the form {d, Name} or {d, Name, Value}.
 -spec def_macros(rebar_state:t(), [ {d, atom()} | {d, atom(), any()} ]) -> rebar_state:t().
@@ -566,7 +574,7 @@ with_pulse(State, #{pulse := false}) ->
     State.
 
 -spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
-with_cover(State, #{eqc_cover := true, eqc_cover_nocompile := false}) ->
+with_cover(State, #{eqc_cover := true, eqc_cover_compile := true}) ->
   rebar_api:info("Compiling with eqc_cover", []),
   ErlOpts    = rebar_state:get(State, erl_opts, []),
   NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
@@ -635,8 +643,8 @@ set_defaults(State, Defaults) ->
     Props = lists:uniq([ V || {property, V} <- Args ]),
     Mods = lists:uniq([ V || {module, V} <- Args ]),
     DupArgs =
-      [{properties, Props} || Props /= [] ] ++
-      [{modules, Mods} || Mods /= [] ] ++
+      [{properties, Props} ] ++
+      [{modules, Mods} ] ++
       [ {K, V} || {K, V} <- Args, not lists:member(K, [property, module]) ],
     ArgOptions = maps:from_list(DupArgs),
     maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)).
