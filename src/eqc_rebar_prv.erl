@@ -46,10 +46,11 @@ init(State) ->
                     {sys_config, undefined, "sys_config", string,
                      "Path to a sys.config file to use"},
                     %%  {counterexample, undefined, "counterexample", boolean, "Show counterexample"},
-                    {property, undefined, "property", atom,
-                     "Resitrict checking to property with this name (can be used multiple times)"},
+                    {regexp, $k, "regexp", string,
+                     "Filter tests by keyword expression that should match Mod:Prop. "
+                     "For example '-k \"prop_ab.*\" retricts to testing only properties that start with name ab"},
                     {module, undefined, "module", atom,
-                     "Resitrict checking to properties in this module/these modules (can be used multiple times)"},
+                     "Restrict checking to properties in given module (can be used multiple times)"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
                     {shell, $s, "shell", boolean, "Enter and Erlang shell"},
                     {compile, $c, "compile", boolean, "Only compile code, do not run quickcheck"},
@@ -85,7 +86,7 @@ do(State) ->
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
-                                   , properties => []
+                                   , regexp => undefined
                                    , modules => []
                                    , shell => false
                                    , plain => false
@@ -190,17 +191,23 @@ do(State, Options)->
 do_eqc(State, Options) ->
     PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
-    {EqcModules, Properties} = select_properties(PropDirs, maps:with([modules, properties], Options)),
+    {Properties, EqcModules, RegexpProps} = select_properties(PropDirs, maps:with([modules, regexp], Options)),
 
     case {maps:get(shell, Options), maps:get(compile, Options)} of
         {false, false} ->
             rebar_api:info("Running EQC tests...~n", []),
 
-            case length(EqcModules) of
-                0 ->
+            case {length(Properties), length(EqcModules) + length(RegexpProps), maps:is_key(regexp, Options)} of
+                {0, _, _} ->
                     rebar_api:warn("No properties found: ~p", [ PropDirs ]);
-                _NrModules ->
-                    rebar_api:info("Found following properties: ~p", [ Properties ]),
+                {_, 0, false} ->
+                    rebar_api:warn("No properties in selected modules found: ~p", [ PropDirs ]);
+                {_, 0, true} ->
+                    rebar_api:warn("No properties match regexp: ~p", [ PropDirs ]);
+                _ ->
+                    RunProperties = [ {M, P} || {M, P} <- Properties, lists:member(M, EqcModules) ] ++ RegexpProps,
+                    rebar_api:info("Found following properties: ~p",
+                                   [ RunProperties ]),
 
                     %% Define a testing budget if numtests not explicitly specified
                     TotalBudget = maps:get(testing_budget, Options, 20),
@@ -214,7 +221,7 @@ do_eqc(State, Options) ->
                     %% TODO handle skip and other results
                     eqc_cover_init(Options),
                     EQCResults =
-                        lists:foldl(fun(Mod, Acc) ->
+                        lists:foldl(fun(Mod, Acc) when is_atom(Mod) ->
                                         Budget =
                                             [{testing_budget,
                                               max(1, TotalBudget * proplists:get_value(Mod, Weights, 1)
@@ -238,15 +245,22 @@ do_eqc(State, Options) ->
                                                                              OnOutput ++ Profile, Mod)
                                                               catch _:Reason:Trace ->
                                                                   [{module, Reason, Trace}]
+                                                              end];
+                                       ({Mod, Prop}, Acc) ->
+                                         Acc ++ [{Mod, P} || P <- try eqc:quickcheck(eqc:eqc_apply(Mod, Prop, [])) of
+                                                                    true -> [];
+                                                                    _ -> [Prop]
+                                                              catch _:Reason:Trace ->
+                                                                  [{module, Reason, Trace}]
                                                               end]
-                                    end, [], EqcModules),
+                                    end, [], EqcModules ++ RegexpProps),
                     eqc_cover_save(Options),
                     case EQCResults of
                         [] ->
-                            cf:print("~!gPassed ~p properties~n", [length(Properties)]);
+                            cf:print("~!gPassed ~p properties~n", [length(RunProperties)]);
                         Failed ->
                             cf:print("~!r~p properties, ~p failures ~!!~n",
-                                     [length(Properties), length(Failed)]),
+                                     [length(RunProperties), length(Failed)]),
                             cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
                             rebar_api:abort("Errors running QuickCheck", [])
                     end
@@ -489,7 +503,13 @@ validate_weight(_Mod, Weight) when is_integer(Weight), Weight > 0 ->
 validate_weight(Mod, Weight) ->
     rebar_api:abort("Invalid module weight for ~p: ~p", [Mod, Weight]).
 
--spec select_properties([ file:filename() ], #{modules := list(atom()), properties := list(atom())}) -> {[atom()], [{atom(), atom(), 0}]}.
+-doc """
+Return a set of modules that we should test and a set of specific properties.
+The modules are handled with the notion of testing budget, the specific properties
+are each run with the complete testing budget.
+""".
+-spec select_properties([ file:filename() ], #{modules := list(atom()), properties := list({atom(), atom()})}) ->
+    {[atom()], [{atom(), atom(), 0}]}.
 select_properties(ProjectDirs, Opts) ->
     %% After compilation, files are already loaded
     Files =
@@ -509,17 +529,19 @@ select_properties(ProjectDirs, Opts) ->
         lists:usort(
           lists:foldl(fun(BeamFile, Props) ->
                               Mod = rebar_utils:beam_to_mod(BeamFile),
-                              [ {Mod, Name, 0} || {Name, 0} <- Mod:module_info(exports),
+                              [ {Mod, Name} || {Name, 0} <- Mod:module_info(exports),
                                                   lists:prefix("prop_", atom_to_list(Name))] ++ Props
                       end, [], Files)),
     Modules = maps:get(modules, Opts, []),
-    Props = maps:get(properties, Opts, []),
-    RestrictedProperties =
-      [ T || {M,P,_} = T <- Properties,
-             Modules == [] orelse lists:member(M, Modules),
-             Props == [] orelse lists:member(P, Props) ],
-    rebar_api:info("Restrictions apply. Not checking ~p", [Properties -- RestrictedProperties]),
-    {lists:usort([M || {M,_,_} <- RestrictedProperties]), RestrictedProperties}.
+    %% If a regexp is given, then we only use modules that are explicitely provided in --modules
+    case maps:get(regexp, Opts, undefined) of
+      undefined ->
+        {Properties, lists:usort([ M || {M,_} <- Properties, Modules == [] orelse lists:member(M, Modules)]), []};
+      RE ->
+        Props =
+          [ {M, P} || {M,P} <- Properties, re:run(lists:concat([M, ":", P]), RE) /= nomatch ],
+        {Properties, lists:usort([ M || {M,_} <- Properties, lists:member(M, Modules)]), Props}
+    end.
 
 %% Macro definitions of the form {d, Name} or {d, Name, Value}.
 -spec def_macros(rebar_state:t(), [ {d, atom()} | {d, atom(), any()} ]) -> rebar_state:t().
@@ -640,12 +662,20 @@ format_error(Reason) ->
 set_defaults(State, Defaults) ->
     ConfigOptions = maps:from_list(rebar_state:get(State, ?PROVIDER, [])),
     {Args, _} = rebar_state:command_parsed_args(State),
-    Props = lists:uniq([ V || {property, V} <- Args ]),
     Mods = lists:uniq([ V || {module, V} <- Args ]),
+    RegExp =
+      case proplists:get_value(regexp, Args) of
+        undefined -> [];
+        RE ->
+          try {ok, REc} = re:compile(RE),
+              [{regexp, REc}]
+          catch _:_ ->
+              rebar_api:abort("cannot compile regexp ~p", [RE])
+          end
+      end,
     DupArgs =
-      [{properties, Props} ] ++
-      [{modules, Mods} ] ++
-      [ {K, V} || {K, V} <- Args, not lists:member(K, [property, module]) ],
+      [ {modules, Mods} ] ++ RegExp ++
+      [ {K, V} || {K, V} <- Args, not lists:member(K, [regexp, module]) ],
     ArgOptions = maps:from_list(DupArgs),
     maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)).
 
