@@ -228,13 +228,7 @@ do_eqc(State, Options) ->
                                                       div max(1, TotalWeight))} ||
                                                 maps:is_key(testing_budget, Options) orelse
                                                     not maps:is_key(numtests, Options)],
-                                        Format =
-                                            case maps:get(plain, Options) of
-                                                true  -> fun io:format/2;
-                                                false -> fun(Fmt, Args) ->
-                                                             coloured_output(Mod, Fmt, Args)
-                                                         end
-                                            end,
+                                        Format = format_fun(Mod, Options),
                                         OnOutput =
                                             [{on_output, fun(Fmt, Args) ->
                                                              eqc_cover_on_output(Mod, Fmt, Args, Options),
@@ -247,11 +241,15 @@ do_eqc(State, Options) ->
                                                                   [{module, Reason, Trace}]
                                                               end];
                                        ({Mod, Prop}, Acc) ->
-                                         Acc ++ [{Mod, P} || P <- try eqc:quickcheck(eqc:eqc_apply(Mod, Prop, [])) of
+                                         eqc_cover_start(Prop, Options),
+                                         CallProp = eqc:on_output(format_fun(Mod, Options), eqc:eqc_apply(Mod, Prop, [])),
+                                         Acc ++ [{Mod, P} || P <- try eqc:quickcheck(CallProp) of
                                                                     true -> [];
                                                                     _ -> [Prop]
                                                               catch _:Reason:Trace ->
                                                                   [{module, Reason, Trace}]
+                                                              after
+                                                                  eqc_cover_stop(Mod, Options)
                                                               end]
                                     end, [], EqcModules ++ RegexpProps),
                     eqc_cover_save(Options),
@@ -272,6 +270,13 @@ do_eqc(State, Options) ->
             ok
     end.
 
+-spec format_fun(module(), map()) -> fun((string(), list(term())) -> term()).
+format_fun(Mod, Options) ->
+    case maps:get(plain, Options) of
+        true  -> fun eqc:format/2;
+        false -> fun(Fmt, Args) -> coloured_output(Mod, Fmt, Args) end
+    end.
+
 -define(COVER_TABLE, eqc_cover_table).
 
 -spec eqc_cover_init(map()) -> ok.
@@ -284,21 +289,26 @@ eqc_cover_init(_) -> ok.
 %% The correct solution is of course to fix eqc:module/2 itself so it can do
 %% per-property coverage.
 eqc_cover_on_output(_Mod, _Fmt, _Args, #{eqc_cover := false}) -> ok;
-eqc_cover_on_output(_Mod, "~w: ", [Prop], _) ->
-  ets:insert(?COVER_TABLE, {prop, Prop}),
-  eqc_cover:start(),
+eqc_cover_on_output(_Mod, "~w: ", [Prop], Options) ->
+  eqc_cover_start(Prop, Options),
   ok;
-eqc_cover_on_output(Mod, "~nOK, passed" ++ _, _Args, _) ->
-  eqc_cover_stop(Mod);
-eqc_cover_on_output(Mod, "~nGave up!" ++ _, _Args, _) ->
-  eqc_cover_stop(Mod);
-eqc_cover_on_output(Mod, "After ~w tests" ++ _, _Args, _) ->
+eqc_cover_on_output(Mod, "~nOK, passed" ++ _, _Args, Options) ->
+  eqc_cover_stop(Mod, Options);
+eqc_cover_on_output(Mod, "~nGave up!" ++ _, _Args, Options) ->
+  eqc_cover_stop(Mod, Options);
+eqc_cover_on_output(Mod, "After ~w tests" ++ _, _Args, Options) ->
   %% This means we don't measure coverage during shrinking, but that's probably correct?
-  eqc_cover_stop(Mod);
+  eqc_cover_stop(Mod, Options);
 eqc_cover_on_output(_Mod, _Fmt, _Args, _) ->
   ok.
 
-eqc_cover_stop(Mod) ->
+eqc_cover_start(Prop, #{eqc_cover := true}) ->
+  ets:insert(?COVER_TABLE, {prop, Prop}),
+  eqc_cover:start();
+eqc_cover_start(_, _) ->
+  ok.
+
+eqc_cover_stop(Mod, #{eqc_cover := true}) ->
   try
     [{prop, Prop}] = ets:lookup(?COVER_TABLE, prop),
     ets:delete(?COVER_TABLE, prop),
@@ -309,7 +319,8 @@ eqc_cover_stop(Mod) ->
   catch _:Reason:Trace ->
     rebar_api:error("Failed to collect coverage: ~p\n  ~p", [Reason, Trace])
   end,
-  ok.
+  ok;
+eqc_cover_stop(_Mod, _) -> ok.
 
 -spec eqc_cover_save(map()) -> ok.
 eqc_cover_save(#{eqc_cover := false}) -> ok;
