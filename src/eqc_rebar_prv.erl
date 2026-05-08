@@ -23,17 +23,34 @@ init(State) ->
             {bare, true},                 % The task can be run by the user, always true
             {deps, ?DEPS},                % The list of dependencies
             {example, "rebar3 quickcheck"}, % How to use the plugin
-            {opts, [{pulse, $P, "pulse", boolean, "Compile with 'PULSE' macro and pulse_instrument parse transform"},
-                    {auto_instrument, undefined, "auto_instrument", boolean, "With --pulse set to false for no additional parse_transform"},
-                    %% {dir, $d, "dir", string, help(dir)},
-                    {numtests, $n, "numtests", integer, "Set numtests parameter"},
-                    {testing_budget, $t, "testing_budget", integer, "Set total testing time in seconds"},
-                    {testing_profile, $p, "testing_profile", string, "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
-                    {eqc_cover, undefined, "eqc_cover", boolean, "Measure code coverage with eqc_cover"},
-                    {eqc_cover_html, undefined, "eqc_cover_html", string, "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
-                    {eqc_cover_ticks, undefined, "eqc_cover_ticks", string, "File to save cover ticks data (as term_to_binary) or 'none' to not save (default: none)"},
-                    {sys_config, undefined, "sys_config", string, "Path to a sys.config file to use"},
-                    %%  {counterexample, $c, "counterexample", boolean, "Show counterexample"},
+            {opts, [{pulse, $P, "pulse", boolean,
+                     "Compile with 'PULSE' macro and pulse_instrument parse transform"},
+                    {auto_instrument, undefined, "auto_instrument", boolean,
+                     "With --pulse set to false for no additional parse_transform"},
+                    {numtests, $n, "numtests", integer,
+                     "Set numtests parameter"},
+                    {testing_budget, $t, "testing_budget", integer,
+                     "Set total testing time in seconds"},
+                    {testing_profile, $p, "testing_profile", string,
+                     "Set the testing profile, which can determine properties to test using property_weight/2 callback"},
+                    {eqc_cover, undefined, "eqc_cover", boolean,
+                     "Measure code coverage with eqc_cover. "
+                     "Compiles files with eqc_cover, unless eqc_cover_nocompile is set."},
+                    {eqc_cover_compile, undefined, "auto_cover_compile", boolean,
+                     "With --eqc_cover set to false for disabling automatic compilation with eqc_cover. "
+                     "Compilation can be manually crafted elsewhere."},
+                    {eqc_cover_html, undefined, "eqc_cover_html", string,
+                     "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
+                    {eqc_cover_ticks, undefined, "eqc_cover_ticks", string,
+                     "File to save cover ticks data (as term_to_binary) or 'none' to not save (default: none)"},
+                    {sys_config, undefined, "sys_config", string,
+                     "Path to a sys.config file to use"},
+                    %%  {counterexample, undefined, "counterexample", boolean, "Show counterexample"},
+                    {regexp, $k, "regexp", string,
+                     "Filter tests by keyword expression that should match Mod:Prop. "
+                     "For example '-k \"prop_ab.*\" retricts to testing only properties that start with name ab"},
+                    {module, undefined, "module", atom,
+                     "Restrict checking to properties in given module (can be used multiple times)"},
                     {plain, $x, "plain", boolean, "Renders plain output"},
                     {shell, $s, "shell", boolean, "Enter and Erlang shell"},
                     {compile, $c, "compile", boolean, "Only compile code, do not run quickcheck"},
@@ -65,9 +82,12 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
+                                   , eqc_cover_compile => true  %% defaut is compiling with eqc_cover
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
+                                   , regexp => undefined
+                                   , modules => []
                                    , shell => false
                                    , plain => false
                                    , install => false
@@ -171,17 +191,23 @@ do(State, Options)->
 do_eqc(State, Options) ->
     PropDirs = rebar_state:code_paths(State, all_deps),
     rebar_api:debug("Found following directories: ~p", [ PropDirs ]),
-    {EqcModules, Properties} = select_properties(PropDirs),
+    {Properties, EqcModules, RegexpProps} = select_properties(PropDirs, maps:with([modules, regexp], Options)),
 
     case {maps:get(shell, Options), maps:get(compile, Options)} of
         {false, false} ->
             rebar_api:info("Running EQC tests...~n", []),
 
-            case length(EqcModules) of
-                0 ->
+            case {length(Properties), length(EqcModules) + length(RegexpProps), maps:is_key(regexp, Options)} of
+                {0, _, _} ->
                     rebar_api:warn("No properties found: ~p", [ PropDirs ]);
-                _NrModules ->
-                    rebar_api:info("Found following properties: ~p", [ Properties ]),
+                {_, 0, false} ->
+                    rebar_api:warn("No properties in selected modules found: ~p", [ PropDirs ]);
+                {_, 0, true} ->
+                    rebar_api:warn("No properties match regexp: ~p", [ PropDirs ]);
+                _ ->
+                    RunProperties = [ {M, P} || {M, P} <- Properties, lists:member(M, EqcModules) ] ++ RegexpProps,
+                    rebar_api:info("Found following properties: ~p",
+                                   [ RunProperties ]),
 
                     %% Define a testing budget if numtests not explicitly specified
                     TotalBudget = maps:get(testing_budget, Options, 20),
@@ -195,20 +221,14 @@ do_eqc(State, Options) ->
                     %% TODO handle skip and other results
                     eqc_cover_init(Options),
                     EQCResults =
-                        lists:foldl(fun(Mod, Acc) ->
+                        lists:foldl(fun(Mod, Acc) when is_atom(Mod) ->
                                         Budget =
                                             [{testing_budget,
                                               max(1, TotalBudget * proplists:get_value(Mod, Weights, 1)
                                                       div max(1, TotalWeight))} ||
                                                 maps:is_key(testing_budget, Options) orelse
                                                     not maps:is_key(numtests, Options)],
-                                        Format =
-                                            case maps:get(plain, Options) of
-                                                true  -> fun io:format/2;
-                                                false -> fun(Fmt, Args) ->
-                                                             coloured_output(Mod, Fmt, Args)
-                                                         end
-                                            end,
+                                        Format = format_fun(Mod, Options),
                                         OnOutput =
                                             [{on_output, fun(Fmt, Args) ->
                                                              eqc_cover_on_output(Mod, Fmt, Args, Options),
@@ -219,15 +239,26 @@ do_eqc(State, Options) ->
                                                                              OnOutput ++ Profile, Mod)
                                                               catch _:Reason:Trace ->
                                                                   [{module, Reason, Trace}]
+                                                              end];
+                                       ({Mod, Prop}, Acc) ->
+                                         eqc_cover_start(Prop, Options),
+                                         EQCProp = eqc:on_output(format_fun(Mod, Options), eqc:eqc_apply(Mod, Prop, [])),
+                                         Acc ++ [{Mod, P} || P <- try eqc:quickcheck(prop_budget(Options, EQCProp)) of
+                                                                    true -> [];
+                                                                    _ -> [Prop]
+                                                              catch _:Reason:Trace ->
+                                                                  [{module, Reason, Trace}]
+                                                              after
+                                                                  eqc_cover_stop(Mod, Options)
                                                               end]
-                                    end, [], EqcModules),
+                                    end, [], EqcModules ++ RegexpProps),
                     eqc_cover_save(Options),
                     case EQCResults of
                         [] ->
-                            cf:print("~!gPassed ~p properties~n", [length(Properties)]);
+                            cf:print("~!gPassed ~p properties~n", [length(RunProperties)]);
                         Failed ->
                             cf:print("~!r~p properties, ~p failures ~!!~n",
-                                     [length(Properties), length(Failed)]),
+                                     [length(RunProperties), length(Failed)]),
                             cf:print("~!rFailed: ~p  ~!!~n", [Failed]),
                             rebar_api:abort("Errors running QuickCheck", [])
                     end
@@ -238,6 +269,21 @@ do_eqc(State, Options) ->
             %% Only compile, let next command do something sensible with it
             ok
     end.
+
+-spec format_fun(module(), map()) -> fun((string(), list(term())) -> term()).
+format_fun(Mod, Options) ->
+    case maps:get(plain, Options) of
+        true  -> fun eqc:format/2;
+        false -> fun(Fmt, Args) -> coloured_output(Mod, Fmt, Args) end
+    end.
+
+%% Numtests takes priority over testing budget
+prop_budget(#{numtests := Num}, Prop) ->
+    eqc:numtests(Num, Prop);
+prop_budget(#{testing_budget := T}, Prop) ->
+    eqc:testing_time(T, Prop);
+prop_budget(_, Prop) ->
+  Prop.
 
 -define(COVER_TABLE, eqc_cover_table).
 
@@ -251,21 +297,26 @@ eqc_cover_init(_) -> ok.
 %% The correct solution is of course to fix eqc:module/2 itself so it can do
 %% per-property coverage.
 eqc_cover_on_output(_Mod, _Fmt, _Args, #{eqc_cover := false}) -> ok;
-eqc_cover_on_output(_Mod, "~w: ", [Prop], _) ->
-  ets:insert(?COVER_TABLE, {prop, Prop}),
-  eqc_cover:start(),
+eqc_cover_on_output(_Mod, "~w: ", [Prop], Options) ->
+  eqc_cover_start(Prop, Options),
   ok;
-eqc_cover_on_output(Mod, "~nOK, passed" ++ _, _Args, _) ->
-  eqc_cover_stop(Mod);
-eqc_cover_on_output(Mod, "~nGave up!" ++ _, _Args, _) ->
-  eqc_cover_stop(Mod);
-eqc_cover_on_output(Mod, "After ~w tests" ++ _, _Args, _) ->
+eqc_cover_on_output(Mod, "~nOK, passed" ++ _, _Args, Options) ->
+  eqc_cover_stop(Mod, Options);
+eqc_cover_on_output(Mod, "~nGave up!" ++ _, _Args, Options) ->
+  eqc_cover_stop(Mod, Options);
+eqc_cover_on_output(Mod, "After ~w tests" ++ _, _Args, Options) ->
   %% This means we don't measure coverage during shrinking, but that's probably correct?
-  eqc_cover_stop(Mod);
+  eqc_cover_stop(Mod, Options);
 eqc_cover_on_output(_Mod, _Fmt, _Args, _) ->
   ok.
 
-eqc_cover_stop(Mod) ->
+eqc_cover_start(Prop, #{eqc_cover := true}) ->
+  ets:insert(?COVER_TABLE, {prop, Prop}),
+  eqc_cover:start();
+eqc_cover_start(_, _) ->
+  ok.
+
+eqc_cover_stop(Mod, #{eqc_cover := true}) ->
   try
     [{prop, Prop}] = ets:lookup(?COVER_TABLE, prop),
     ets:delete(?COVER_TABLE, prop),
@@ -276,7 +327,8 @@ eqc_cover_stop(Mod) ->
   catch _:Reason:Trace ->
     rebar_api:error("Failed to collect coverage: ~p\n  ~p", [Reason, Trace])
   end,
-  ok.
+  ok;
+eqc_cover_stop(_Mod, _) -> ok.
 
 -spec eqc_cover_save(map()) -> ok.
 eqc_cover_save(#{eqc_cover := false}) -> ok;
@@ -470,8 +522,14 @@ validate_weight(_Mod, Weight) when is_integer(Weight), Weight > 0 ->
 validate_weight(Mod, Weight) ->
     rebar_api:abort("Invalid module weight for ~p: ~p", [Mod, Weight]).
 
--spec select_properties([ file:filename() ]) -> {[atom()], [{atom(), atom(), 0}]}.
-select_properties(ProjectDirs) ->
+-doc """
+Return a set of modules that we should test and a set of specific properties.
+The modules are handled with the notion of testing budget, the specific properties
+are each run with the complete testing budget.
+""".
+-spec select_properties([ file:filename() ], #{modules := list(atom()), properties := list({atom(), atom()})}) ->
+    {[atom()], [{atom(), atom(), 0}]}.
+select_properties(ProjectDirs, Opts) ->
     %% After compilation, files are already loaded
     Files =
         lists:foldl(fun(Dir, Fs) ->
@@ -490,10 +548,19 @@ select_properties(ProjectDirs) ->
         lists:usort(
           lists:foldl(fun(BeamFile, Props) ->
                               Mod = rebar_utils:beam_to_mod(BeamFile),
-                              [ {Mod, Name, 0} || {Name, 0} <- Mod:module_info(exports),
+                              [ {Mod, Name} || {Name, 0} <- Mod:module_info(exports),
                                                   lists:prefix("prop_", atom_to_list(Name))] ++ Props
                       end, [], Files)),
-    {lists:usort([M || {M,_,_} <- Properties]), Properties}.
+    Modules = maps:get(modules, Opts, []),
+    %% If a regexp is given, then we only use modules that are explicitely provided in --modules
+    case maps:get(regexp, Opts, undefined) of
+      undefined ->
+        {Properties, lists:usort([ M || {M,_} <- Properties, Modules == [] orelse lists:member(M, Modules)]), []};
+      RE ->
+        Props =
+          [ {M, P} || {M,P} <- Properties, re:run(lists:concat([M, ":", P]), RE) /= nomatch ],
+        {Properties, lists:usort([ M || {M,_} <- Properties, lists:member(M, Modules)]), Props}
+    end.
 
 %% Macro definitions of the form {d, Name} or {d, Name, Value}.
 -spec def_macros(rebar_state:t(), [ {d, atom()} | {d, atom(), any()} ]) -> rebar_state:t().
@@ -548,7 +615,7 @@ with_pulse(State, #{pulse := false}) ->
     State.
 
 -spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
-with_cover(State, #{eqc_cover := true}) ->
+with_cover(State, #{eqc_cover := true, eqc_cover_compile := true}) ->
   rebar_api:info("Compiling with eqc_cover", []),
   ErlOpts    = rebar_state:get(State, erl_opts, []),
   NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
@@ -614,7 +681,21 @@ format_error(Reason) ->
 set_defaults(State, Defaults) ->
     ConfigOptions = maps:from_list(rebar_state:get(State, ?PROVIDER, [])),
     {Args, _} = rebar_state:command_parsed_args(State),
-    ArgOptions = maps:from_list(Args),
+    Mods = lists:uniq([ V || {module, V} <- Args ]),
+    RegExp =
+      case proplists:get_value(regexp, Args) of
+        undefined -> [];
+        RE ->
+          try {ok, REc} = re:compile(RE),
+              [{regexp, REc}]
+          catch _:_ ->
+              rebar_api:abort("cannot compile regexp ~p", [RE])
+          end
+      end,
+    DupArgs =
+      [ {modules, Mods} ] ++ RegExp ++
+      [ {K, V} || {K, V} <- Args, not lists:member(K, [regexp, module]) ],
+    ArgOptions = maps:from_list(DupArgs),
     maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)).
 
 setup_name(State) ->
