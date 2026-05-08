@@ -242,8 +242,8 @@ do_eqc(State, Options) ->
                                                               end];
                                        ({Mod, Prop}, Acc) ->
                                          eqc_cover_start(Prop, Options),
-                                         CallProp = eqc:on_output(format_fun(Mod, Options), eqc:eqc_apply(Mod, Prop, [])),
-                                         Acc ++ [{Mod, P} || P <- try eqc:quickcheck(CallProp) of
+                                         EQCProp = eqc:on_output(format_fun(Mod, Options), eqc:eqc_apply(Mod, Prop, [])),
+                                         Acc ++ [{Mod, P} || P <- try eqc:quickcheck(prop_budget(Options, EQCProp)) of
                                                                     true -> [];
                                                                     _ -> [Prop]
                                                               catch _:Reason:Trace ->
@@ -276,6 +276,14 @@ format_fun(Mod, Options) ->
         true  -> fun eqc:format/2;
         false -> fun(Fmt, Args) -> coloured_output(Mod, Fmt, Args) end
     end.
+
+%% Numtests takes priority over testing budget
+prop_budget(#{numtests := Num}, Prop) ->
+    eqc:numtests(Num, Prop);
+prop_budget(#{testing_budget := T}, Prop) ->
+    eqc:testing_time(T, Prop);
+prop_budget(_, Prop) ->
+  Prop.
 
 -define(COVER_TABLE, eqc_cover_table).
 
