@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        otp-version: [24, 25, 26, 27, 28, 28.5, 29]
+        otp-version: [24, 25, 26, 27, 28, 28.5]
         rebar-version: [3.24, 3.27]
 
     steps:
