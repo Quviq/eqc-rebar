@@ -1,0 +1,31 @@
+name: Main CI job
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build plugin
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        otp-version: [24, 25, 26, 27, 28, 28.5, 29]
+        rebar-version: [3.24, 3.27]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Erlang OTP-${{ matrix.otp-version }}
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp-version }}
+          rebar3-version: ${{ matrix.rebar-version }}
+
+      - name: Compile plugin
+        run: |
+          rebar3 compile
+
