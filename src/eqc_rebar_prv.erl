@@ -522,11 +522,9 @@ validate_weight(_Mod, Weight) when is_integer(Weight), Weight > 0 ->
 validate_weight(Mod, Weight) ->
     rebar_api:abort("Invalid module weight for ~p: ~p", [Mod, Weight]).
 
--doc """
-Return a set of modules that we should test and a set of specific properties.
-The modules are handled with the notion of testing budget, the specific properties
-are each run with the complete testing budget.
-""".
+%% Return a set of modules that we should test and a set of specific properties.
+%% The modules are handled with the notion of testing budget, the specific properties
+%% are each run with the complete testing budget.
 -spec select_properties([ file:filename() ], #{modules := list(atom()), properties := list({atom(), atom()})}) ->
     {[atom()], [{atom(), atom(), 0}]}.
 select_properties(ProjectDirs, Opts) ->
