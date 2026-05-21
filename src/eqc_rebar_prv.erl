@@ -498,11 +498,9 @@ profile_candidates(Profile) when is_atom(Profile) ->
 profile_candidates(Profile) when is_binary(Profile) ->
     profile_candidates(binary_to_list(Profile));
 profile_candidates(Profile) when is_list(Profile) ->
-    case catch list_to_existing_atom(Profile) of
-        Atom when is_atom(Atom) ->
-            [Profile, Atom];
-        _ ->
-            [Profile]
+    try [Profile, list_to_existing_atom(Profile)]
+    catch
+        error:badarg -> [Profile]
     end;
 profile_candidates(Profile) ->
     [Profile].
