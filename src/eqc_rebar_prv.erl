@@ -36,8 +36,8 @@ init(State) ->
                     {eqc_cover, undefined, "eqc_cover", boolean,
                      "Measure code coverage with eqc_cover. "
                      "Compiles files with eqc_cover, unless eqc_cover_nocompile is set."},
-                    {eqc_cover_compile, undefined, "auto_cover_compile", boolean,
-                     "With --eqc_cover set to false for disabling automatic compilation with eqc_cover. "
+                    {eqc_cover_nocompile, undefined, "eqc_cover_nocompile", boolean,
+                     "With --eqc_cover this glag can be set to true for disabling automatic compilation with eqc_cover. "
                      "Compilation can be manually crafted elsewhere."},
                     {eqc_cover_html, undefined, "eqc_cover_html", string,
                      "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
@@ -82,7 +82,7 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
-                                   , eqc_cover_compile => true  %% defaut is compiling with eqc_cover
+                                   , eqc_cover_nocompile => false  %% defaut is compiling with eqc_cover
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
@@ -611,7 +611,7 @@ with_pulse(State, #{pulse := false}) ->
     State.
 
 -spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
-with_cover(State, #{eqc_cover := true, eqc_cover_compile := true}) ->
+with_cover(State, #{eqc_cover := true, eqc_cover_nocompile := false}) ->
   rebar_api:info("Compiling with eqc_cover", []),
   ErlOpts    = rebar_state:get(State, erl_opts, []),
   NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
