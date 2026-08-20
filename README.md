@@ -13,7 +13,7 @@ running eqc properties:
 Use
 ---
 
-Add the plugin to your rebar configof an existing application:
+Add the plugin to your rebar config of an existing application:
 
     {plugins, [
         {eqc_rebar, {git, "https://github.com/Quviq/eqc-rebar.git", {branch, "master"}}}
@@ -145,6 +145,26 @@ rebar3 eqc --shell
 ```
 This differs from `rebar3 do eqc, shell` by the fact that the latter
 first checks all properties and then provides an Erlang shell.
+
+EQC code coverage
+---
+QuickCheck comes with a code coverage tool that counts statement coverage 
+(instead of more traditional line coverage).
+
+Add the option `--eqc_cover` to the rebar3 command and your code will be compiled
+for code coverage, the properties will be ran and the htlm coverage report will
+be generated in a directory `cover-results`.
+```bash
+rebar3 eqc --eqc_cover
+```
+
+With options `--eqc_cover_html` the directory to store the cover results can be specified.
+
+It is also possible to abstain from automatic compilation for coverage, but do this
+manually for those files you are interested in. If so, instead of the option 
+`--eqc_cover` use `--eqc_cover_nocompile`.
+Note: you may need to perform a `rebar clean` to remove already cover compiled code
+when you do not want to cover compile.
 
 EQC options
 ---
