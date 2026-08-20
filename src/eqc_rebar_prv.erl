@@ -37,8 +37,8 @@ init(State) ->
                      "Measure code coverage with eqc_cover. "
                      "Compiles files with eqc_cover, unless eqc_cover_nocompile is set."},
                     {eqc_cover_nocompile, undefined, "eqc_cover_nocompile", boolean,
-                     "With --eqc_cover this glag can be set to true for disabling automatic compilation with eqc_cover. "
-                     "Compilation can be manually crafted elsewhere."},
+                     "As --eqc_cover but without compiling for coverage. "
+                     "Cover compilation can/should be manually crafted elsewhere."},
                     {eqc_cover_html, undefined, "eqc_cover_html", string,
                      "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
                     {eqc_cover_ticks, undefined, "eqc_cover_ticks", string,
@@ -82,7 +82,7 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
-                                   , eqc_cover_nocompile => false  %% defaut is compiling with eqc_cover
+                                   , eqc_cover_nocompile => false
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
@@ -692,7 +692,10 @@ set_defaults(State, Defaults) ->
       [ {modules, Mods} ] ++ RegExp ++
       [ {K, V} || {K, V} <- Args, not lists:member(K, [regexp, module]) ],
     ArgOptions = maps:from_list(DupArgs),
-    maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)).
+    case maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)) of
+        #{eqc_cover_nocompile := true} = Opts -> Opts#{eqc_cover => true};
+        Opts -> Opts
+    end.
 
 setup_name(State) ->
     {Long, Short, Opts} = rebar_dist_utils:find_options(State),
