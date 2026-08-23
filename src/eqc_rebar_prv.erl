@@ -36,9 +36,9 @@ init(State) ->
                     {eqc_cover, undefined, "eqc_cover", boolean,
                      "Measure code coverage with eqc_cover. "
                      "Compiles files with eqc_cover, unless eqc_cover_nocompile is set."},
-                    {eqc_cover_compile, undefined, "auto_cover_compile", boolean,
-                     "With --eqc_cover set to false for disabling automatic compilation with eqc_cover. "
-                     "Compilation can be manually crafted elsewhere."},
+                    {eqc_cover_nocompile, undefined, "eqc_cover_nocompile", boolean,
+                     "As --eqc_cover but without compiling for coverage. "
+                     "Cover compilation can/should be manually crafted elsewhere."},
                     {eqc_cover_html, undefined, "eqc_cover_html", string,
                      "Output directory for coverage html or 'none' for no html output (default: cover-results)"},
                     {eqc_cover_ticks, undefined, "eqc_cover_ticks", string,
@@ -82,7 +82,7 @@ do(State) ->
     Options = set_defaults(State, #{ pulse => false
                                    , auto_instrument => true %% given that pulse is specified
                                    , eqc_cover => false
-                                   , eqc_cover_compile => true  %% defaut is compiling with eqc_cover
+                                   , eqc_cover_nocompile => false
                                    , eqc_cover_html => "cover-results"
                                    , eqc_cover_ticks => "none"
                                    , sys_config => undefined
@@ -611,7 +611,7 @@ with_pulse(State, #{pulse := false}) ->
     State.
 
 -spec with_cover(rebar_state:t(), map()) -> rebar_state:t().
-with_cover(State, #{eqc_cover := true, eqc_cover_compile := true}) ->
+with_cover(State, #{eqc_cover := true, eqc_cover_nocompile := false}) ->
   rebar_api:info("Compiling with eqc_cover", []),
   ErlOpts    = rebar_state:get(State, erl_opts, []),
   NewErlOpts = [{parse_transform, eqc_cover} | ErlOpts],
@@ -692,7 +692,10 @@ set_defaults(State, Defaults) ->
       [ {modules, Mods} ] ++ RegExp ++
       [ {K, V} || {K, V} <- Args, not lists:member(K, [regexp, module]) ],
     ArgOptions = maps:from_list(DupArgs),
-    maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)).
+    case maps:merge(Defaults, maps:merge(ConfigOptions, ArgOptions)) of
+        #{eqc_cover_nocompile := true} = Opts -> Opts#{eqc_cover => true};
+        Opts -> Opts
+    end.
 
 setup_name(State) ->
     {Long, Short, Opts} = rebar_dist_utils:find_options(State),
