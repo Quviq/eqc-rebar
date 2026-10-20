@@ -544,8 +544,7 @@ select_properties(ProjectDirs, Opts) ->
         lists:usort(
           lists:foldl(fun(BeamFile, Props) ->
                               Mod = rebar_utils:beam_to_mod(BeamFile),
-                              [ {Mod, Name} || {Name, 0} <- Mod:module_info(exports),
-                                                  lists:prefix("prop_", atom_to_list(Name))] ++ Props
+                              props(Mod) ++ Props
                       end, [], Files)),
     Modules = maps:get(modules, Opts, []),
     %% If a regexp is given, then we only use modules that are explicitely provided in --modules
@@ -556,6 +555,16 @@ select_properties(ProjectDirs, Opts) ->
         Props =
           [ {M, P} || {M,P} <- Properties, re:run(lists:concat([M, ":", P]), RE) /= nomatch ],
         {Properties, lists:usort([ M || {M,_} <- Properties, lists:member(M, Modules)]), Props}
+    end.
+
+props(Mod) ->
+    try Mod:module_info(exports) of
+      Exports ->
+        [ {Mod, Name} || {Name, 0} <- Exports,
+                        lists:prefix("prop_", atom_to_list(Name)) ]
+    catch
+      _:_ ->
+       []
     end.
 
 %% Macro definitions of the form {d, Name} or {d, Name, Value}.

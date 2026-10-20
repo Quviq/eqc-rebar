@@ -27,6 +27,8 @@ jobs:
             rebar-version: 3.27.0
           - otp-version: 28.5
             rebar-version: 3.27.0
+          - otp-version: 29.1
+            rebar-version: 3.27.3
 
     steps:
       - uses: actions/checkout@v6
